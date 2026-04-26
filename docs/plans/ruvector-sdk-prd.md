@@ -99,20 +99,26 @@ These are specified in detail in §5.
   - `http` — talks to `ruvector-server`. For remote / serverless deployments.
 - **Backend selection** is automatic from environment, overridable via constructor option.
 
-### 5.2 Architecture: archetypes over features
+### 5.2 Architecture: archetypes over features *(updated by M4 v0.1, 2026-04-26)*
 
-The headline export is **eight seed archetypes** (subject to evolution per §11). Each archetype is a pre-wired pipeline that activates the upstream capabilities appropriate to its workload.
+The headline export is **the archetype list below**. M4 v0.1 ratified the eight seed archetypes against M3's catalog and added two evidence-driven proposals (`LocalLLM`, `AgentFramework`). Three seed archetypes (`CodebaseIndex`, `GenomicAnalyzer`, `RecommendationEngine`) have insufficient dedicated upstream support and are flagged as *recipe candidates* rather than first-class archetypes pending v0.2 decision.
 
-| Archetype | Workload | Default-active capabilities (illustrative; final list set after §6 analysis) |
-|---|---|---|
-| `KnowledgeBase` | RAG over documents | Hybrid (sparse+dense) + RRF + Graph RAG (Leiden) + ColBERT rerank + SONA |
-| `AgentMemory` | Long-term agent state | GNN-learned index + SONA + EWC++ + hyperbolic HNSW for hierarchical recall |
-| `CodebaseIndex` | Code search | ColBERT multi-vector + Matryoshka funnel + symbol graph + AST-aware chunking |
-| `RecommendationEngine` | User × item retrieval | Bipartite GNN + collaborative filtering + temporal tensor compression |
-| `TaxonomySearch` | Hierarchical / tree-like data | Hyperbolic HNSW + tree-aware metadata filters |
-| `TimeSeriesMemory` | Sequential / streaming data | Mamba SSM attention + delta indexing + temporal-causal layers |
-| `GenomicAnalyzer` | Bio sequences | rvDNA + HNSW k-mer search + biomarker engine |
-| `GraphReasoner` | Multi-hop + Cypher queries | Cypher engine + graph transformers + sublinear PageRank + sparsifier |
+| Archetype | Status | Member crates | Items | Default-active capabilities |
+|---|---|--:|--:|---|
+| `KnowledgeBase` | seed ✓ | 9 | 1,507 | `ruvector-core` + `-graph` + `-attention` + `-cnn` + `sona` + `-gnn` + `-rabitq` + `-rulake` + `-diskann` |
+| `AgentMemory` | seed ✓ | 5 | 1,051 | `ruvector-gnn` + `sona` + `-attention` + `-graph` + `-domain-expansion` |
+| `CodebaseIndex` | **at risk** | 0 | 0 | _No dedicated upstream crate. Demote to recipe-on-top-of-KnowledgeBase in v0.2._ |
+| `RecommendationEngine` | **at risk** | 1 (shared) | 84 | _Only `ruvector-gnn` (shared with AgentMemory). No dedicated infrastructure._ |
+| `TaxonomySearch` | seed ✓ (with risk) | 2 | 283 | `ruvector-hyperbolic-hnsw` (excluded from default workspace) + `ruvector-filter` |
+| `TimeSeriesMemory` | seed ✓ | 12 | 953 | `ruvector-attention` (Mamba) + `-temporal-tensor` + delta-* (5 crates) + neural-trader-* (4) + `ruvector-kalshi` |
+| `GenomicAnalyzer` | **at risk** | 0 | 0 | _Demo-stage only (examples/dna, npm rvdna). Demote to recipe in v0.2._ |
+| `GraphReasoner` | seed ✓ | 11 | 1,866 | `ruvector-graph` + `-graph-transformer` + `-mincut` + `-mincut-gated-transformer` + `-attn-mincut` + `-solver` + `-sparsifier` + `-dag` + 3 more |
+| **`LocalLLM`** | **proposed M4** | 4 | 1,774 | `ruvllm` (1,547 items, single largest crate) + `-tiny-dancer-core` + `-sparse-inference` + `ruvllm-cli` |
+| **`AgentFramework`** | **proposed M4** | 9 | 641 | rvagent-core + -a2a + -mcp + -acp + -middleware + -backends + -tools + -subagents + -cli |
+
+> **What changed vs the v0.1 PRD draft.** The original capability lists in this section were inferred from upstream README marketing prose and were illustrative-only. M4 replaced them with assignments that cite specific M3 catalog items + ADRs. See `tools/archetypes/assignments.mjs` for full per-crate rationale; `catalog/by-archetype/<name>.md` for the generated views; `catalog/archetype-coverage.md` for the summary.
+
+> **Open editorial decision for v0.2.** Promote `LocalLLM` and `AgentFramework` from *proposed* to *seed*; demote `CodebaseIndex`, `GenomicAnalyzer`, and possibly `RecommendationEngine` from headline to recipe. Do this before M5 (API freeze) so the SDK type surface reflects the ratified archetype list.
 
 Each archetype has:
 - A reference example application (one per archetype, in `examples/sdk/<archetype>/`)
@@ -451,7 +457,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | M1 | Phase 0 — ADR skeleton extracted (`catalog/adrs.json`) | done 2026-04-26 | M0 | 1 session |
 | M2 | Phase 1 — Ripgrep inventory bootstrap | done 2026-04-26 | M1 | 1 session |
 | M3 | Phase 2 — `syn`-based cataloger v0.1 | done 2026-04-26 | M2 | 1 session |
-| M4 | Archetype ratification (final list, mapped to L3 items) | User + TBD | M3 | 2 days |
+| M4 | Archetype ratification (final list, mapped to L3 items) | done 2026-04-26 (v0.1) | M3 | 1 session |
 | M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | TBD | M4 | 3 days |
 | M6 | Reference example for one archetype (`KnowledgeBase`) | TBD | M5 | 1 week |
 | M7 | SDK v0.1 — three backends, one archetype | TBD | M6 | 2 weeks |
