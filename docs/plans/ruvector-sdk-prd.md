@@ -243,14 +243,33 @@ These are the highest-value finds for the SDK.
 - Vendored dependencies under `patches/`
 - Generated artifacts in `target/`, `dist/`, `node_modules/`
 
-### 6.4 Phase 0 — Bootstrap from ADRs
+### 6.4 Phase 0 — Bootstrap from ADRs *(M1, complete)*
 
-Read all 171 ADR files. For each, extract:
-- ADR ID, title, status (proposed/accepted/superseded)
-- Crates / modules / files referenced
-- Decision summary (≤2 sentences)
+Implementation: `tools/extract-adrs/extract-adrs.mjs` — dependency-free Node ESM.
+Outputs: `catalog/adrs.json` and `catalog/adrs.md`. Re-runnable; deterministic apart from the top-level `extracted_at` timestamp.
 
-Output: `catalog/adrs.json`. This becomes the structural skeleton — the analysis knows ADR-088 covers crates X and Y before it parses the code.
+Per-ADR fields extracted: id, sub_letter (for ADR-040a/b), title, slug, status (parsed + raw), date, header format (A/B/C), referenced ADRs, referenced crates, supersession relations, summary first paragraph, file path, size, line count.
+
+Three header format generations supported:
+- **A** — bold key-value pairs (`**Status**: Proposed` or `**Status:** Proposed`) — 96 ADRs
+- **B** — markdown subsection (`## Status` followed by value) — 48 ADRs
+- **C** — markdown table, with or without bold labels — 27 ADRs
+
+**M1 findings (from running the tool, not assumed):**
+
+| Metric | Value |
+|---|---|
+| ADRs parsed | **171** |
+| Highest ID | ADR-159 (8 IDs missing in range: 018–023, 041, 152) |
+| Real upstream crates on disk | **164** (top-level `crates/` + `ruvix/crates/` nested + `rvf/rvf-*` peers) |
+| Crate refs found in ADRs | 212 |
+| Verified (match a real crate) | 116 |
+| Unverified (renamed / removed / external / GCP resource) | 96 |
+| **Real crates with no ADR coverage** | **48** |
+
+The 48-crates-with-no-ADR finding is the highest-signal output of M1: it's a concrete priority list for M3. It includes the entire 22-crate `ruvix/` subworkspace, the `agentic-robotics-*` family (6 crates), and infrastructure crates like `ruvector-server`, `ruvector-cli`, `ruvector-cluster`, `ruvector-router-core` — code that exists and ships but has no ADR record explaining why.
+
+The 96 unverified crate refs are not all bugs; many are renamed crates (e.g., `ruvector-deep-*` family, likely the previous name for `rvAgent`) or external dependencies (`fips204`, `lean-agentic`). M2's `Cargo.toml` walk + git-history scan will classify each definitively.
 
 ### 6.5 Phase 1 — Ripgrep-driven inventory (bootstrap, fast)
 
@@ -388,7 +407,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | # | Milestone | Owner | Dependencies | Rough effort |
 |---|---|---|---|---|
 | M0 | This PRD approved | User | — | done with this draft |
-| M1 | Phase 0 — ADR skeleton extracted (`catalog/adrs.json`) | TBD | M0 | 1–2 days |
+| M1 | Phase 0 — ADR skeleton extracted (`catalog/adrs.json`) | done 2026-04-26 | M0 | 1 session |
 | M2 | Phase 1 — Ripgrep inventory bootstrap | TBD | M1 | 2–3 days |
 | M3 | Phase 2 — `syn`-based cataloger v1 | TBD | M2 | 5–8 days |
 | M4 | Archetype ratification (final list, mapped to L3 items) | User + TBD | M3 | 2 days |
@@ -445,7 +464,7 @@ The SDK is successful when:
 
 ## Appendix A — Upstream inventory snapshot (informational)
 
-Captured 2026-04-26 from cloned upstream:
+Captured 2026-04-26 from cloned upstream. Numbers below are from `ls`; the 164 real-crates count is from the M1 cataloger's authoritative on-disk walk.
 
 ```
 crates/                       125 top-level dirs
@@ -454,9 +473,10 @@ crates/                       125 top-level dirs
   crates/rvAgent/              9 nested (DeepAgents Rust port)
   crates/ruvllm-*              7 (cli, wasm, per-platform binaries)
   crates/tiny-dancer-*         5 (per-platform binaries)
+Total resolvable crate dirs   164 (per tools/extract-adrs)
 npm/packages/                  57 packages
 examples/                      73 example apps
-docs/adr/                      171 ADR files (numbered to ADR-159)
+docs/adr/                      171 ADR files (numbered to ADR-159; 8 IDs missing)
 ```
 
 Workspace `Cargo.toml` excludes (won't appear in `cargo build --workspace`): `ruvector-postgres`, `micro-hnsw-wasm`, `ruvector-hyperbolic-hnsw[-wasm]`, `mcp-brain-server`, several `examples/*`, the entire `crates/rvf/` subtree (it has its own workspace).
