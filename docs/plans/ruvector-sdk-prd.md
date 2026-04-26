@@ -271,17 +271,36 @@ The 48-crates-with-no-ADR finding is the highest-signal output of M1: it's a con
 
 The 96 unverified crate refs are not all bugs; many are renamed crates (e.g., `ruvector-deep-*` family, likely the previous name for `rvAgent`) or external dependencies (`fips204`, `lean-agentic`). M2's `Cargo.toml` walk + git-history scan will classify each definitively.
 
-### 6.5 Phase 1 — Ripgrep-driven inventory (bootstrap, fast)
+### 6.5 Phase 1 — Ripgrep-driven inventory *(M2, complete)*
 
-A short script that:
-1. Walks every in-scope crate.
-2. Extracts `Cargo.toml` metadata (name, version, deps, features, workspace status).
-3. `rg`-matches `^pub (fn|struct|trait|enum|const|type|macro)` to enumerate L3 items at first approximation.
-4. `rg`-matches `#\[napi` and `#\[wasm_bindgen` to flag bindings.
-5. Cross-references doc comments (`///` lines preceding `pub`).
-6. Emits `catalog/inventory-bootstrap.json` for review.
+Implementation: `tools/inventory/inventory.mjs` — dependency-free Node ESM, ~1 second runtime.
+Outputs:
+- `catalog/inventory-bootstrap.json` — full machine-readable catalog (~9 MB)
+- `catalog/inventory-bootstrap.md` — per-crate summary table
+- `catalog/hidden-features-bootstrap.md` — ADR-orphan crates only, sorted by public-item count (priority list for M3)
 
-This is rough — regex misses macros, cfg-gated items, and re-exports — but it gets a 70% catalog in hours, not weeks. It also tells us where the AST-driven phase will need to be most careful.
+**M2 findings (from running the tool):**
+
+| Metric | Value | Notes |
+|---|---:|---|
+| Leaf crates discovered | **196** | Up from M1's 164 — M1 over-counted workspace wrappers (`ruvix`, `rvf`) and missed nested members of `rvAgent` (10 sub-crates) and `rvm` (10 sub-crates). M2 detects leaf crates generically by `[package]` presence. |
+| Public items found | **33,130** | `pub fn` 20,232 / `struct` 5,615 / `const` 2,427 / `use` 1,610 (re-exports) / `mod` 1,585 / `enum` 1,190 / `type` 251 / `trait` 191 / `static` 29 |
+| `#[napi]` bindings | **551** across 13 crates | Top: `ruvector-attention-node` (201), `sona` (45) |
+| `#[wasm_bindgen]` bindings | **1,780** across 34 crates | Top: `ruvllm-wasm` (435), `ruvector-attention-unified-wasm` (143) |
+| **ADR-orphan crates** | **86** | Up from M1's reported 48 — M1 only counted orphans in *its own* known crate set; M2 corrects this. |
+| **Public items in orphan crates** | **7,595** | The headline number: 23% of the upstream public surface has no ADR coverage. |
+| Crates with 0 pub items found | 11 | Mostly tests, benches, examples nested in workspaces; tagged via `category` field (library/test/bench/example/binary). |
+
+**Single-line case for the SDK:** 7,595 public items across 86 crates have *no decision record*. That is roughly four times the surface the ADRs document. The discoverability gap is now quantified.
+
+**Bootstrap limitations** (declared in the JSON's `notes` field):
+- `pub use` re-export chains not resolved — re-exports counted as `use`, not their underlying kind.
+- `#[cfg(feature = "...")]` gates not evaluated — items counted unconditionally.
+- Macro-generated items (NAPI/WASM expansions, derive output) not visible — only the *attribute lines* are captured.
+
+All three are M3's job. M2 deliberately stays at the regex layer to maximize re-runnability against upstream churn.
+
+**Cross-reference correctness:** Each crate carries `is_adr_orphan` derived from M1's reverse index, plus a `category` tag (`library` / `test` / `bench` / `example` / `binary`) so SDK archetype work in M4 can filter test/bench/example crates without manual review.
 
 ### 6.6 Phase 2 — AST-driven catalog (target)
 
@@ -408,7 +427,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 |---|---|---|---|---|
 | M0 | This PRD approved | User | — | done with this draft |
 | M1 | Phase 0 — ADR skeleton extracted (`catalog/adrs.json`) | done 2026-04-26 | M0 | 1 session |
-| M2 | Phase 1 — Ripgrep inventory bootstrap | TBD | M1 | 2–3 days |
+| M2 | Phase 1 — Ripgrep inventory bootstrap | done 2026-04-26 | M1 | 1 session |
 | M3 | Phase 2 — `syn`-based cataloger v1 | TBD | M2 | 5–8 days |
 | M4 | Archetype ratification (final list, mapped to L3 items) | User + TBD | M3 | 2 days |
 | M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | TBD | M4 | 3 days |
