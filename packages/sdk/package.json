@@ -1,0 +1,32 @@
+{
+  "name": "@ruvector/sdk",
+  "version": "0.0.0-m5",
+  "description": "RuVector SDK — task-first archetypes over upstream ruvector. M5 surface freeze (types only, no implementation).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./advanced": {
+      "import": "./dist/advanced/index.js",
+      "types": "./dist/advanced/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "verify": "tsc --noEmit && tsc --noEmit -p examples/tsconfig.json"
+  },
+  "engines": { "node": ">= 18" },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "license": "MIT"
+}

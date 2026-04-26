@@ -125,7 +125,23 @@ Each archetype has:
 - A specification of which upstream features it activates
 - A `getValueReport()` whose dormant-capability recommendations are tailored to its workload
 
-### 5.3 Public API sketch (illustrative)
+### 5.3 Public API *(M5 v0.1 — types frozen)*
+
+The TypeScript surface lives at `packages/sdk/src/`. M5 v0.1 freezes the shape; M6 wires the first archetype to a real backend.
+
+**Shipped surface:**
+
+- `packages/sdk/src/index.ts` — re-exports six archetypes + cross-cutting types
+- `packages/sdk/src/archetypes/{KnowledgeBase,AgentMemory,GraphReasoner,TimeSeriesMemory,LocalLLM,AgentFramework}.ts`
+- `packages/sdk/src/core/{backend,explain,feedback,pipeline,value-report,index}.ts`
+- `packages/sdk/src/advanced/index.ts` — `LowLevel`, `capabilities` registry, namespace placeholders for FPGA/Quantum/Postgres/Kernel
+- `packages/sdk/examples/api-shape.ts` — exercises every archetype to verify the surface compiles end-to-end
+
+**Verification:** `npm run verify` runs `tsc --noEmit` against both src and the example. Clean compile in v0.1.
+
+**Three "at-risk" archetypes deliberately omitted from M5** pending v0.2 PRD decision: `CodebaseIndex`, `GenomicAnalyzer`, `RecommendationEngine`. M4 found insufficient upstream support; locking types now would freeze decisions M4 said weren't ready.
+
+**Sketch (illustrative, retained from earlier draft):**
 
 ```ts
 import { KnowledgeBase, AgentMemory, CodebaseIndex } from '@ruvector/sdk';
@@ -458,7 +474,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | M2 | Phase 1 — Ripgrep inventory bootstrap | done 2026-04-26 | M1 | 1 session |
 | M3 | Phase 2 — `syn`-based cataloger v0.1 | done 2026-04-26 | M2 | 1 session |
 | M4 | Archetype ratification (final list, mapped to L3 items) | done 2026-04-26 (v0.1) | M3 | 1 session |
-| M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | TBD | M4 | 3 days |
+| M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | done 2026-04-26 (v0.1) | M4 | 1 session |
 | M6 | Reference example for one archetype (`KnowledgeBase`) | TBD | M5 | 1 week |
 | M7 | SDK v0.1 — three backends, one archetype | TBD | M6 | 2 weeks |
 | M8 | SDK v0.2 — three archetypes, `getValueReport`, `.explain` | TBD | M7 | 3 weeks |
