@@ -11,7 +11,7 @@
 //   B) markdown subsections: ## Status \n Accepted
 //   C) markdown tables: | **Status** | Accepted |
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
 import { join, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -178,32 +178,64 @@ function parseAdr(filePath, fileName) {
 
 function loadRealCrates() {
   // Build the authoritative set of real upstream crate names from disk.
-  // Used to flag ADR crate references that don't correspond to anything that
-  // exists today (renamed, removed, external deps mistaken as crates, etc.).
-  const out = new Set();
+  // Walks the entire crates/ tree and recognizes any directory whose
+  // Cargo.toml has a [package] section as a leaf crate. Naming follows the
+  // M2 convention (collision-free disambiguation):
+  //   - ruvix nested → "ruvix/<X>"
+  //   - rvm   nested → "rvm/<X>"  (collapsed like ruvix)
+  //   - everything else → basename, with parent prepended only on collision
+  // This replaced an earlier hardcoded version that only knew ruvix and rvf,
+  // missing all 10 rvAgent/rvagent-* nested crates and 10 rvm/* nested crates,
+  // which incorrectly marked them as ADR-orphans even when ADR-159 etc.
+  // explicitly referenced them.
   const cratesRoot = join(REPO_ROOT, 'ruvector', 'crates');
-  for (const name of readdirSync(cratesRoot)) {
-    const p = join(cratesRoot, name);
-    if (!statSync(p).isDirectory()) continue;
-    out.add(name);
+
+  function isLeafCrate(dirPath) {
+    const toml = join(dirPath, 'Cargo.toml');
+    if (!existsSync(toml)) return false;
+    return /^\[package\]/m.test(readFileSync(toml, 'utf8'));
   }
-  // ruvix nested workspace
-  const ruvixCrates = join(cratesRoot, 'ruvix', 'crates');
-  try {
-    for (const name of readdirSync(ruvixCrates)) {
-      const p = join(ruvixCrates, name);
-      if (statSync(p).isDirectory()) out.add(`ruvix/${name}`);
+
+  const leaves = [];
+  function walk(dir, depth = 0) {
+    if (depth > 4) return;
+    if (isLeafCrate(dir)) {
+      leaves.push({ path: dir, rel: dir.slice(cratesRoot.length + 1) });
+      return;
     }
-  } catch {/* ruvix may be absent */}
-  // rvf peer subworkspace
-  const rvfRoot = join(cratesRoot, 'rvf');
-  try {
-    for (const name of readdirSync(rvfRoot)) {
-      const p = join(rvfRoot, name);
-      if (statSync(p).isDirectory() && name.startsWith('rvf-')) out.add(name);
+    for (const entry of readdirSync(dir).sort()) {
+      const p = join(dir, entry);
+      try {
+        if (!statSync(p).isDirectory()) continue;
+      } catch { continue; }
+      if (entry === 'target' || entry === 'node_modules' || entry === '.git') continue;
+      walk(p, depth + 1);
     }
-  } catch {/* rvf may be absent */}
-  return out;
+  }
+  walk(cratesRoot);
+
+  // Collapse `ruvix/crates/X` → `ruvix/X` and `rvm/crates/X` → `rvm/X` to
+  // match the M2 catalog's naming.
+  const candidates = leaves.map((l) => {
+    const parts = l.rel.split('/');
+    if ((parts[0] === 'ruvix' || parts[0] === 'rvm') && parts[1] === 'crates') parts.splice(1, 1);
+    return { parts, name: parts[parts.length - 1] };
+  });
+  // Collision-only depth-extending dedup.
+  for (const c of candidates) c.depth = 1;
+  for (let pass = 0; pass < 5; pass++) {
+    const counts = {};
+    for (const c of candidates) counts[c.name] = (counts[c.name] || 0) + 1;
+    const colliding = candidates.filter((c) => counts[c.name] > 1);
+    if (colliding.length === 0) break;
+    for (const c of colliding) {
+      if (c.depth < c.parts.length) {
+        c.depth++;
+        c.name = c.parts.slice(-c.depth).join('/');
+      }
+    }
+  }
+  return new Set(candidates.map((c) => c.name));
 }
 
 function buildCatalog() {

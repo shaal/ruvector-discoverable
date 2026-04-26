@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "extracted_at": "2026-04-26T05:12:52.497Z",
+  "extracted_at": "2026-04-26T05:34:38.963Z",
   "source_dir": "ruvector/docs/adr",
   "upstream_repo": "https://github.com/ruvnet/ruvector",
   "stats": {
@@ -39,10 +39,10 @@
       "B": 48
     },
     "crate_refs_total": 212,
-    "crate_refs_verified": 116,
-    "crate_refs_unverified": 96,
-    "real_crates_total": 164,
-    "real_crates_with_no_adr": 48,
+    "crate_refs_verified": 126,
+    "crate_refs_unverified": 86,
+    "real_crates_total": 196,
+    "real_crates_with_no_adr": 70,
     "review_flags": {
       "no_status": [],
       "unknown_format": [],
@@ -55,13 +55,13 @@
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     },
     "cap": {
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     },
     "cognitum-gate-kernel": {
       "adrs": [
@@ -218,7 +218,7 @@
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     },
     "prime-radiant": {
       "adrs": [
@@ -234,13 +234,13 @@
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     },
     "region": {
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     },
     "ruQu": {
       "adrs": [
@@ -1110,7 +1110,7 @@
       "adrs": [
         "ADR-106"
       ],
-      "verified": true
+      "verified": false
     },
     "ruvix-aarch64": {
       "adrs": [
@@ -1293,7 +1293,7 @@
       "adrs": [
         "ADR-137"
       ],
-      "verified": true
+      "verified": false
     },
     "ruvix/memory": {
       "adrs": [
@@ -1305,7 +1305,7 @@
       "adrs": [
         "ADR-135"
       ],
-      "verified": true
+      "verified": false
     },
     "ruvllm": {
       "adrs": [
@@ -1349,31 +1349,31 @@
         "ADR-113",
         "ADR-159"
       ],
-      "verified": true
+      "verified": false
     },
     "rvagent-a2a": {
       "adrs": [
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-acp": {
       "adrs": [
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-backends": {
       "adrs": [
         "ADR-107"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-cli": {
       "adrs": [
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-core": {
       "adrs": [
@@ -1382,7 +1382,7 @@
         "ADR-107",
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-mcp": {
       "adrs": [
@@ -1392,13 +1392,13 @@
         "ADR-112",
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-middleware": {
       "adrs": [
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-skills": {
       "adrs": [
@@ -1411,7 +1411,7 @@
       "adrs": [
         "ADR-159"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-swarm": {
       "adrs": [
@@ -1424,14 +1424,14 @@
         "ADR-104",
         "ADR-105"
       ],
-      "verified": false
+      "verified": true
     },
     "rvagent-wasm": {
       "adrs": [
         "ADR-107",
         "ADR-113"
       ],
-      "verified": false
+      "verified": true
     },
     "rvf": {
       "adrs": [
@@ -1445,7 +1445,7 @@
         "ADR-106",
         "ADR-155"
       ],
-      "verified": true
+      "verified": false
     },
     "rvf-adapter-claude-flow": {
       "adrs": [
@@ -1457,7 +1457,7 @@
       "adrs": [
         "ADR-106"
       ],
-      "verified": true
+      "verified": false
     },
     "rvf-cli": {
       "adrs": [
@@ -1736,20 +1736,15 @@
       "adrs": [
         "ADR-142"
       ],
-      "verified": false
+      "verified": true
     }
   },
   "unverified_crate_refs": [
-    "boot",
-    "cap",
     "fips204",
     "lean-agentic",
     "mcp-federation",
     "micro-hnsw",
     "mincut",
-    "nucleus",
-    "proof",
-    "region",
     "ruvector-architect",
     "ruvector-backups-daily",
     "ruvector-backups-dr",
@@ -1783,6 +1778,7 @@
     "ruvector-seed",
     "ruvector-sona",
     "ruvector-witness",
+    "ruvix",
     "ruvix-aarch64",
     "ruvix-bcm2711",
     "ruvix-boot",
@@ -1808,20 +1804,15 @@
     "ruvix-types",
     "ruvix-vecgraph",
     "ruvix-x86_64",
+    "ruvix/aarch64",
     "ruvix/memory",
-    "rvagent-a2a",
-    "rvagent-acp",
-    "rvagent-backends",
-    "rvagent-cli",
-    "rvagent-core",
-    "rvagent-mcp",
-    "rvagent-middleware",
+    "ruvix/proof",
+    "rvAgent",
     "rvagent-skills",
-    "rvagent-subagents",
     "rvagent-swarm",
-    "rvagent-tools",
-    "rvagent-wasm",
+    "rvf",
     "rvf-adapter-claude-flow",
+    "rvf-adapters",
     "rvf-compat",
     "rvf-diff-privacy",
     "rvf-fed-aggregate",
@@ -1834,17 +1825,33 @@
     "rvf-proofs",
     "rvf-rebuild",
     "solver",
-    "sparsifier",
-    "types"
+    "sparsifier"
   ],
   "real_crates_with_no_adr": [
+    "aarch64",
+    "agentdb",
+    "agentic-flow",
     "agentic-robotics-benchmarks",
     "agentic-robotics-core",
     "agentic-robotics-embedded",
     "agentic-robotics-mcp",
     "agentic-robotics-node",
     "agentic-robotics-rt",
-    "profiling",
+    "bcm2711",
+    "claude-flow",
+    "cli",
+    "cognitive_demo",
+    "dma",
+    "drivers",
+    "dtb",
+    "fs",
+    "hal",
+    "net",
+    "ospipe",
+    "physmem",
+    "qemu-swarm",
+    "queue",
+    "rpi-boot",
     "ruqu-algorithms",
     "ruqu-core",
     "ruvector-attention-cli",
@@ -1864,28 +1871,33 @@
     "ruvector-tiny-dancer-core",
     "ruvector-tiny-dancer-node",
     "ruvector-tiny-dancer-wasm",
-    "ruvix/bcm2711",
-    "ruvix/boot",
-    "ruvix/cap",
-    "ruvix/cli",
-    "ruvix/dma",
-    "ruvix/drivers",
-    "ruvix/dtb",
-    "ruvix/fs",
-    "ruvix/hal",
-    "ruvix/net",
-    "ruvix/nucleus",
-    "ruvix/physmem",
-    "ruvix/queue",
-    "ruvix/region",
-    "ruvix/rpi-boot",
-    "ruvix/sched",
-    "ruvix/shell",
-    "ruvix/smp",
-    "ruvix/types",
-    "ruvix/vecgraph",
+    "ruvix/benches",
+    "ruvix/tests",
     "ruvllm-cli",
-    "rvm"
+    "rvf-adapters/rvlite",
+    "rvf-adapters/sona",
+    "rvf-integration",
+    "rvf/benches",
+    "rvm-boot",
+    "rvm-cap",
+    "rvm-coherence",
+    "rvm-hal",
+    "rvm-kernel",
+    "rvm-memory",
+    "rvm-partition",
+    "rvm-proof",
+    "rvm-sched",
+    "rvm-security",
+    "rvm-types",
+    "rvm-wasm",
+    "rvm-witness",
+    "rvm/benches",
+    "rvm/tests",
+    "sched",
+    "shell",
+    "smp",
+    "swarm-consensus",
+    "vecgraph"
   ],
   "supplementary_dirs": [
     "coherence-engine",

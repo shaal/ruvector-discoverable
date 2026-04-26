@@ -1,0 +1,21 @@
+[package]
+name = "ruvector-cataloger"
+version = "0.1.0"
+edition = "2021"
+description = "M3 — syn-based AST cataloger for the ruvector SDK PRD"
+publish = false
+
+[[bin]]
+name = "ruvector-cataloger"
+path = "src/main.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits", "parsing"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

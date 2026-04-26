@@ -105,74 +105,6 @@ _... +289 more — see `catalog/inventory-bootstrap.json`_
 _... +222 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `rvagent-core` — 240 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-core*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `enum` | `SegmentType` | `crates/rvAgent/rvagent-core/src/agi_container.rs:19` |
-| `fn` | `from_u8` | `crates/rvAgent/rvagent-core/src/agi_container.rs:35` |
-| `mod` | `agi_tags` | `crates/rvAgent/rvagent-core/src/agi_container.rs:57` |
-| `const` | `TOOL_REGISTRY` | `crates/rvAgent/rvagent-core/src/agi_container.rs:58` |
-| `const` | `AGENT_PROMPTS` | `crates/rvAgent/rvagent-core/src/agi_container.rs:59` |
-| `const` | `SKILL_LIBRARY` | `crates/rvAgent/rvagent-core/src/agi_container.rs:60` |
-| `const` | `ORCHESTRATOR` | `crates/rvAgent/rvagent-core/src/agi_container.rs:61` |
-| `const` | `MIDDLEWARE_CONFIG` | `crates/rvAgent/rvagent-core/src/agi_container.rs:62` |
-| `struct` | `ToolDefinition` | `crates/rvAgent/rvagent-core/src/agi_container.rs:67` |
-| `struct` | `AgentPrompt` | `crates/rvAgent/rvagent-core/src/agi_container.rs:76` |
-| `struct` | `SkillDefinition` | `crates/rvAgent/rvagent-core/src/agi_container.rs:84` |
-| `struct` | `OrchestratorConfig` | `crates/rvAgent/rvagent-core/src/agi_container.rs:93` |
-| `struct` | `AgentNode` | `crates/rvAgent/rvagent-core/src/agi_container.rs:101` |
-| `struct` | `AgiContainerBuilder` | `crates/rvAgent/rvagent-core/src/agi_container.rs:135` |
-| `fn` | `new` | `crates/rvAgent/rvagent-core/src/agi_container.rs:141` |
-| `fn` | `with_tools` | `crates/rvAgent/rvagent-core/src/agi_container.rs:148` |
-| `fn` | `with_prompts` | `crates/rvAgent/rvagent-core/src/agi_container.rs:159` |
-| `fn` | `with_skills` | `crates/rvAgent/rvagent-core/src/agi_container.rs:170` |
-| `fn` | `with_orchestrator` | `crates/rvAgent/rvagent-core/src/agi_container.rs:181` |
-| `fn` | `build` | `crates/rvAgent/rvagent-core/src/agi_container.rs:202` |
-| `fn` | `parse` | `crates/rvAgent/rvagent-core/src/agi_container.rs:228` |
-| `struct` | `ParsedContainer` | `crates/rvAgent/rvagent-core/src/agi_container.rs:334` |
-| `enum` | `ContainerError` | `crates/rvAgent/rvagent-core/src/agi_container.rs:343` |
-| `struct` | `Arena` | `crates/rvAgent/rvagent-core/src/arena.rs:15` |
-| `fn` | `new` | `crates/rvAgent/rvagent-core/src/arena.rs:23` |
-
-_... +215 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `types` — 228 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/types*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `CapHandle` | `crates/ruvix/crates/types/src/capability.rs:13` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:19` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:26` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:33` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:40` |
-| `struct` | `CapRights` | `crates/ruvix/crates/types/src/capability.rs:57` |
-| `const` | `READ` | `crates/ruvix/crates/types/src/capability.rs:61` |
-| `const` | `WRITE` | `crates/ruvix/crates/types/src/capability.rs:64` |
-| `const` | `GRANT` | `crates/ruvix/crates/types/src/capability.rs:67` |
-| `const` | `REVOKE` | `crates/ruvix/crates/types/src/capability.rs:70` |
-| `const` | `EXECUTE` | `crates/ruvix/crates/types/src/capability.rs:73` |
-| `const` | `PROVE` | `crates/ruvix/crates/types/src/capability.rs:77` |
-| `const` | `GRANT_ONCE` | `crates/ruvix/crates/types/src/capability.rs:81` |
-| `const` | `NONE` | `crates/ruvix/crates/types/src/capability.rs:84` |
-| `const` | `ALL` | `crates/ruvix/crates/types/src/capability.rs:87` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:92` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:99` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:106` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:113` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:120` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:127` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:134` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:141` |
-| `struct` | `Capability` | `crates/ruvix/crates/types/src/capability.rs:188` |
-| `const` | `fn` | `crates/ruvix/crates/types/src/capability.rs:212` |
-
-_... +203 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `ruvector-cli` — 227 public items (0 NAPI, 0 WASM)
 *crates/ruvector-cli*
 
@@ -241,74 +173,6 @@ _... +202 more — see `catalog/inventory-bootstrap.json`_
 _... +190 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `rvagent-middleware` — 204 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-middleware*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `FilesystemMiddleware` | `crates/rvAgent/rvagent-middleware/src/filesystem.rs:13` |
-| `fn` | `new` | `crates/rvAgent/rvagent-middleware/src/filesystem.rs:19` |
-| `fn` | `with_cwd` | `crates/rvAgent/rvagent-middleware/src/filesystem.rs:23` |
-| `enum` | `ApprovalDecision` | `crates/rvAgent/rvagent-middleware/src/hitl.rs:10` |
-| `struct` | `HumanInTheLoopMiddleware` | `crates/rvAgent/rvagent-middleware/src/hitl.rs:20` |
-| `fn` | `new` | `crates/rvAgent/rvagent-middleware/src/hitl.rs:26` |
-| `fn` | `should_interrupt` | `crates/rvAgent/rvagent-middleware/src/hitl.rs:31` |
-| `struct` | `HnswMiddlewareConfig` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:36` |
-| `struct` | `EntryMetadata` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:109` |
-| `struct` | `SearchResult` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:122` |
-| `struct` | `HnswStats` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:626` |
-| `struct` | `HnswMiddleware` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:640` |
-| `fn` | `new` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:647` |
-| `fn` | `default_config` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:656` |
-| `fn` | `set_enabled` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:661` |
-| `fn` | `is_enabled` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:666` |
-| `fn` | `stats` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:671` |
-| `fn` | `add_skill` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:676` |
-| `fn` | `add_memory` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:681` |
-| `fn` | `search_skills` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:686` |
-| `fn` | `search_memory` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:691` |
-| `fn` | `retrieve_skill_tools` | `crates/rvAgent/rvagent-middleware/src/hnsw.rs:696` |
-| `mod` | `filesystem` | `crates/rvAgent/rvagent-middleware/src/lib.rs:11` |
-| `mod` | `hitl` | `crates/rvAgent/rvagent-middleware/src/lib.rs:12` |
-| `mod` | `hnsw` | `crates/rvAgent/rvagent-middleware/src/lib.rs:13` |
-
-_... +179 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `rvagent-mcp` — 201 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-mcp*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `McpClient` | `crates/rvAgent/rvagent-mcp/src/client.rs:12` |
-| `fn` | `new` | `crates/rvAgent/rvagent-mcp/src/client.rs:19` |
-| `fn` | `is_initialized` | `crates/rvAgent/rvagent-mcp/src/client.rs:27` |
-| `fn` | `initialize` | `crates/rvAgent/rvagent-mcp/src/client.rs:32` |
-| `fn` | `ping` | `crates/rvAgent/rvagent-mcp/src/client.rs:54` |
-| `fn` | `list_tools` | `crates/rvAgent/rvagent-mcp/src/client.rs:69` |
-| `fn` | `call_tool` | `crates/rvAgent/rvagent-mcp/src/client.rs:91` |
-| `fn` | `read_resource` | `crates/rvAgent/rvagent-mcp/src/client.rs:116` |
-| `fn` | `list_resources` | `crates/rvAgent/rvagent-mcp/src/client.rs:137` |
-| `fn` | `close` | `crates/rvAgent/rvagent-mcp/src/client.rs:158` |
-| `enum` | `ToolGroup` | `crates/rvAgent/rvagent-mcp/src/groups.rs:11` |
-| `fn` | `tools` | `crates/rvAgent/rvagent-mcp/src/groups.rs:34` |
-| `fn` | `all` | `crates/rvAgent/rvagent-mcp/src/groups.rs:90` |
-| `fn` | `all_tools` | `crates/rvAgent/rvagent-mcp/src/groups.rs:105` |
-| `fn` | `as_str` | `crates/rvAgent/rvagent-mcp/src/groups.rs:113` |
-| `struct` | `ToolFilter` | `crates/rvAgent/rvagent-mcp/src/groups.rs:155` |
-| `fn` | `all` | `crates/rvAgent/rvagent-mcp/src/groups.rs:164` |
-| `fn` | `from_groups` | `crates/rvAgent/rvagent-mcp/src/groups.rs:172` |
-| `fn` | `from_group_names` | `crates/rvAgent/rvagent-mcp/src/groups.rs:184` |
-| `fn` | `is_allowed` | `crates/rvAgent/rvagent-mcp/src/groups.rs:190` |
-| `fn` | `count` | `crates/rvAgent/rvagent-mcp/src/groups.rs:195` |
-| `fn` | `allows_all` | `crates/rvAgent/rvagent-mcp/src/groups.rs:204` |
-| `fn` | `allowed_tools` | `crates/rvAgent/rvagent-mcp/src/groups.rs:209` |
-| `mod` | `client` | `crates/rvAgent/rvagent-mcp/src/lib.rs:15` |
-| `mod` | `groups` | `crates/rvAgent/rvagent-mcp/src/lib.rs:16` |
-
-_... +176 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `fs` — 193 public items (0 NAPI, 0 WASM)
 *crates/ruvix/crates/fs*
 
@@ -341,142 +205,6 @@ _... +176 more — see `catalog/inventory-bootstrap.json`_
 | `const` | `fn` | `crates/ruvix/crates/fs/src/fat32.rs:157` |
 
 _... +168 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `cap` — 187 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/cap*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `AuditResult` | `crates/ruvix/crates/cap/src/audit.rs:13` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:40` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:55` |
-| `struct` | `AuditEntry` | `crates/ruvix/crates/cap/src/audit.rs:71` |
-| `struct` | `AuditFlags` | `crates/ruvix/crates/cap/src/audit.rs:93` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:111` |
-| `struct` | `AuditConfig` | `crates/ruvix/crates/cap/src/audit.rs:118` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:139` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:152` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:160` |
-| `struct` | `CapabilityAuditor` | `crates/ruvix/crates/cap/src/audit.rs:176` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:191` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:202` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:213` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:220` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/audit.rs:227` |
-| `fn` | `audit_entry` | `crates/ruvix/crates/cap/src/audit.rs:232` |
-| `fn` | `audit` | `crates/ruvix/crates/cap/src/audit.rs:292` |
-| `fn` | `needs_attention` | `crates/ruvix/crates/cap/src/audit.rs:339` |
-| `struct` | `InitialCapability` | `crates/ruvix/crates/cap/src/boot.rs:18` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/boot.rs:39` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/boot.rs:58` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/boot.rs:71` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/boot.rs:85` |
-| `const` | `fn` | `crates/ruvix/crates/cap/src/boot.rs:100` |
-
-_... +162 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `nucleus` — 185 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/nucleus*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `CheckpointConfig` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:18` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:33` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:45` |
-| `struct` | `Checkpoint` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:63` |
-| `fn` | `create` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:94` |
-| `fn` | `create` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:139` |
-| `fn` | `to_bytes` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:276` |
-| `fn` | `from_bytes` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:310` |
-| `struct` | `ReplayEngine` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:369` |
-| `fn` | `new` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:383` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:395` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:402` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:409` |
-| `fn` | `set_current_time` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:414` |
-| `fn` | `replay_record` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:421` |
-| `fn` | `replay_log` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:457` |
-| `fn` | `verify_state` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:479` |
-| `struct` | `ReplayResult` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:545` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/checkpoint.rs:562` |
-| `struct` | `GraphNode` | `crates/ruvix/crates/nucleus/src/graph_store.rs:24` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/graph_store.rs:37` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/graph_store.rs:48` |
-| `struct` | `GraphEdge` | `crates/ruvix/crates/nucleus/src/graph_store.rs:59` |
-| `const` | `fn` | `crates/ruvix/crates/nucleus/src/graph_store.rs:72` |
-| `fn` | `weight` | `crates/ruvix/crates/nucleus/src/graph_store.rs:83` |
-
-_... +160 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `rvagent-a2a` — 184 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-a2a*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `const` | `ARTIFACT_KIND_VERSION` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:29` |
-| `enum` | `ArtifactKind` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:42` |
-| `fn` | `supported_versions` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:105` |
-| `fn` | `negotiate_version` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:111` |
-| `fn` | `to_a2a_artifact` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:133` |
-| `fn` | `from_a2a_artifact` | `crates/rvAgent/rvagent-a2a/src/artifact_types.rs:201` |
-| `struct` | `GlobalBudget` | `crates/rvAgent/rvagent-a2a/src/budget.rs:30` |
-| `enum` | `OverflowPolicy` | `crates/rvAgent/rvagent-a2a/src/budget.rs:53` |
-| `fn` | `from_str_loose` | `crates/rvAgent/rvagent-a2a/src/budget.rs:105` |
-| `enum` | `BudgetError` | `crates/rvAgent/rvagent-a2a/src/budget.rs:117` |
-| `struct` | `BudgetSnapshot` | `crates/rvAgent/rvagent-a2a/src/budget.rs:130` |
-| `struct` | `BudgetLedger` | `crates/rvAgent/rvagent-a2a/src/budget.rs:156` |
-| `fn` | `new` | `crates/rvAgent/rvagent-a2a/src/budget.rs:162` |
-| `fn` | `try_consume` | `crates/rvAgent/rvagent-a2a/src/budget.rs:184` |
-| `fn` | `snapshot` | `crates/rvAgent/rvagent-a2a/src/budget.rs:279` |
-| `struct` | `A2aClient` | `crates/rvAgent/rvagent-a2a/src/client.rs:41` |
-| `struct` | `A2aClientBuilder` | `crates/rvAgent/rvagent-a2a/src/client.rs:54` |
-| `fn` | `new` | `crates/rvAgent/rvagent-a2a/src/client.rs:62` |
-| `fn` | `http` | `crates/rvAgent/rvagent-a2a/src/client.rs:68` |
-| `fn` | `strict_verify` | `crates/rvAgent/rvagent-a2a/src/client.rs:77` |
-| `fn` | `build` | `crates/rvAgent/rvagent-a2a/src/client.rs:85` |
-| `fn` | `new` | `crates/rvAgent/rvagent-a2a/src/client.rs:105` |
-| `fn` | `builder` | `crates/rvAgent/rvagent-a2a/src/client.rs:111` |
-| `fn` | `with_http` | `crates/rvAgent/rvagent-a2a/src/client.rs:118` |
-| `fn` | `fetch_card` | `crates/rvAgent/rvagent-a2a/src/client.rs:137` |
-
-_... +159 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `boot` — 182 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/boot*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `BootAttestation` | `crates/ruvix/crates/boot/src/attestation.rs:17` |
-| `const` | `SIZE` | `crates/ruvix/crates/boot/src/attestation.rs:42` |
-| `fn` | `new` | `crates/ruvix/crates/boot/src/attestation.rs:46` |
-| `fn` | `with_metadata` | `crates/ruvix/crates/boot/src/attestation.rs:65` |
-| `fn` | `hash` | `crates/ruvix/crates/boot/src/attestation.rs:86` |
-| `fn` | `to_bytes` | `crates/ruvix/crates/boot/src/attestation.rs:104` |
-| `fn` | `from_bytes` | `crates/ruvix/crates/boot/src/attestation.rs:119` |
-| `fn` | `verify` | `crates/ruvix/crates/boot/src/attestation.rs:164` |
-| `struct` | `AttestationEntry` | `crates/ruvix/crates/boot/src/attestation.rs:189` |
-| `enum` | `AttestationEntryType` | `crates/ruvix/crates/boot/src/attestation.rs:215` |
-| `struct` | `AttestationFlags` | `crates/ruvix/crates/boot/src/attestation.rs:241` |
-| `const` | `NONE` | `crates/ruvix/crates/boot/src/attestation.rs:245` |
-| `const` | `HIGH_PRIORITY` | `crates/ruvix/crates/boot/src/attestation.rs:248` |
-| `const` | `DEADLINE_DRIVEN` | `crates/ruvix/crates/boot/src/attestation.rs:251` |
-| `const` | `DEEP_PROOF` | `crates/ruvix/crates/boot/src/attestation.rs:254` |
-| `const` | `DURING_ROLLBACK` | `crates/ruvix/crates/boot/src/attestation.rs:257` |
-| `const` | `fn` | `crates/ruvix/crates/boot/src/attestation.rs:262` |
-| `const` | `fn` | `crates/ruvix/crates/boot/src/attestation.rs:269` |
-| `const` | `SIZE` | `crates/ruvix/crates/boot/src/attestation.rs:276` |
-| `fn` | `new` | `crates/ruvix/crates/boot/src/attestation.rs:280` |
-| `fn` | `with_flags` | `crates/ruvix/crates/boot/src/attestation.rs:300` |
-| `fn` | `hash` | `crates/ruvix/crates/boot/src/attestation.rs:321` |
-| `enum` | `BootStage` | `crates/ruvix/crates/boot/src/boot_loader.rs:17` |
-| `const` | `fn` | `crates/ruvix/crates/boot/src/boot_loader.rs:41` |
-| `struct` | `BootConfig` | `crates/ruvix/crates/boot/src/boot_loader.rs:55` |
-
-_... +157 more — see `catalog/inventory-bootstrap.json`_
 
 
 ## `bcm2711` — 170 public items (0 NAPI, 0 WASM)
@@ -581,40 +309,6 @@ _... +140 more — see `catalog/inventory-bootstrap.json`_
 _... +133 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `rvagent-wasm` — 158 public items (0 NAPI, 48 WASM)
-*crates/rvAgent/rvagent-wasm*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `WasmStateBackend` | `crates/rvAgent/rvagent-wasm/src/backends.rs:19` |
-| `fn` | `new` | `crates/rvAgent/rvagent-wasm/src/backends.rs:26` |
-| `fn` | `read_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:33` |
-| `fn` | `write_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:41` |
-| `fn` | `edit_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:66` |
-| `fn` | `delete_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:80` |
-| `fn` | `list_files` | `crates/rvAgent/rvagent-wasm/src/backends.rs:88` |
-| `fn` | `file_exists` | `crates/rvAgent/rvagent-wasm/src/backends.rs:95` |
-| `fn` | `clear` | `crates/rvAgent/rvagent-wasm/src/backends.rs:100` |
-| `fn` | `file_count` | `crates/rvAgent/rvagent-wasm/src/backends.rs:105` |
-| `fn` | `to_json` | `crates/rvAgent/rvagent-wasm/src/backends.rs:110` |
-| `fn` | `from_json` | `crates/rvAgent/rvagent-wasm/src/backends.rs:115` |
-| `struct` | `WasmFetchBackend` | `crates/rvAgent/rvagent-wasm/src/backends.rs:130` |
-| `fn` | `new` | `crates/rvAgent/rvagent-wasm/src/backends.rs:140` |
-| `fn` | `with_auth` | `crates/rvAgent/rvagent-wasm/src/backends.rs:148` |
-| `fn` | `fetch_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:154` |
-| `fn` | `put_file` | `crates/rvAgent/rvagent-wasm/src/backends.rs:182` |
-| `enum` | `WasmBackendError` | `crates/rvAgent/rvagent-wasm/src/backends.rs:257` |
-| `const` | `MAX_PATH_LENGTH` | `crates/rvAgent/rvagent-wasm/src/backends.rs:294` |
-| `const` | `MAX_FILE_SIZE` | `crates/rvAgent/rvagent-wasm/src/backends.rs:297` |
-| `const` | `MAX_FILES` | `crates/rvAgent/rvagent-wasm/src/backends.rs:300` |
-| `struct` | `JsModelProvider` | `crates/rvAgent/rvagent-wasm/src/bridge.rs:27` |
-| `fn` | `new` | `crates/rvAgent/rvagent-wasm/src/bridge.rs:38` |
-| `fn` | `complete` | `crates/rvAgent/rvagent-wasm/src/bridge.rs:51` |
-| `fn` | `to_js_value` | `crates/rvAgent/rvagent-wasm/src/bridge.rs:75` |
-
-_... +133 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `dma` — 154 public items (0 NAPI, 0 WASM)
 *crates/ruvix/crates/dma*
 
@@ -683,40 +377,6 @@ _... +129 more — see `catalog/inventory-bootstrap.json`_
 _... +108 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `proof` — 132 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/proof*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `AttestationBuilder` | `crates/ruvix/crates/proof/src/attestation.rs:15` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:31` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:43` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:50` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:57` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:64` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:71` |
-| `fn` | `from_token` | `crates/ruvix/crates/proof/src/attestation.rs:78` |
-| `fn` | `build` | `crates/ruvix/crates/proof/src/attestation.rs:141` |
-| `struct` | `WitnessEntry` | `crates/ruvix/crates/proof/src/attestation.rs:161` |
-| `struct` | `WitnessLog` | `crates/ruvix/crates/proof/src/attestation.rs:172` |
-| `fn` | `new` | `crates/ruvix/crates/proof/src/attestation.rs:186` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:198` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:205` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/attestation.rs:212` |
-| `fn` | `append` | `crates/ruvix/crates/proof/src/attestation.rs:217` |
-| `fn` | `get` | `crates/ruvix/crates/proof/src/attestation.rs:246` |
-| `fn` | `latest` | `crates/ruvix/crates/proof/src/attestation.rs:253` |
-| `fn` | `clear` | `crates/ruvix/crates/proof/src/attestation.rs:262` |
-| `fn` | `serialize_attestation` | `crates/ruvix/crates/proof/src/attestation.rs:271` |
-| `fn` | `deserialize_attestation` | `crates/ruvix/crates/proof/src/attestation.rs:296` |
-| `fn` | `create_and_log_attestation` | `crates/ruvix/crates/proof/src/attestation.rs:331` |
-| `struct` | `ProofCacheConfig` | `crates/ruvix/crates/proof/src/cache.rs:15` |
-| `struct` | `CacheEntry` | `crates/ruvix/crates/proof/src/cache.rs:36` |
-| `const` | `fn` | `crates/ruvix/crates/proof/src/cache.rs:55` |
-
-_... +107 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `rvm-types` — 128 public items (0 NAPI, 0 WASM)
 *crates/rvm/crates/rvm-types*
 
@@ -749,74 +409,6 @@ _... +107 more — see `catalog/inventory-bootstrap.json`_
 | `const` | `fn` | `crates/rvm/crates/rvm-types/src/capability.rs:137` |
 
 _... +103 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `rvagent-backends` — 126 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-backends*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `AnthropicClient` | `crates/rvAgent/rvagent-backends/src/anthropic.rs:137` |
-| `fn` | `new` | `crates/rvAgent/rvagent-backends/src/anthropic.rs:148` |
-| `type` | `BackendRef` | `crates/rvAgent/rvagent-backends/src/composite.rs:12` |
-| `struct` | `CompositeBackend` | `crates/rvAgent/rvagent-backends/src/composite.rs:18` |
-| `fn` | `new` | `crates/rvAgent/rvagent-backends/src/composite.rs:27` |
-| `fn` | `add_route` | `crates/rvAgent/rvagent-backends/src/composite.rs:34` |
-| `struct` | `FilesystemBackend` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:32` |
-| `fn` | `new` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:40` |
-| `fn` | `with_options` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:51` |
-| `fn` | `cwd` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:62` |
-| `fn` | `virtual_mode` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:67` |
-| `fn` | `resolve_path` | `crates/rvAgent/rvagent-backends/src/filesystem.rs:75` |
-| `struct` | `GeminiClient` | `crates/rvAgent/rvagent-backends/src/gemini.rs:125` |
-| `fn` | `new` | `crates/rvAgent/rvagent-backends/src/gemini.rs:133` |
-| `mod` | `anthropic` | `crates/rvAgent/rvagent-backends/src/lib.rs:22` |
-| `mod` | `composite` | `crates/rvAgent/rvagent-backends/src/lib.rs:23` |
-| `mod` | `filesystem` | `crates/rvAgent/rvagent-backends/src/lib.rs:24` |
-| `mod` | `gemini` | `crates/rvAgent/rvagent-backends/src/lib.rs:25` |
-| `mod` | `local_shell` | `crates/rvAgent/rvagent-backends/src/lib.rs:26` |
-| `mod` | `protocol` | `crates/rvAgent/rvagent-backends/src/lib.rs:27` |
-| `mod` | `rvf_store` | `crates/rvAgent/rvagent-backends/src/lib.rs:28` |
-| `mod` | `sandbox` | `crates/rvAgent/rvagent-backends/src/lib.rs:29` |
-| `mod` | `security` | `crates/rvAgent/rvagent-backends/src/lib.rs:30` |
-| `mod` | `state` | `crates/rvAgent/rvagent-backends/src/lib.rs:31` |
-| `mod` | `store` | `crates/rvAgent/rvagent-backends/src/lib.rs:32` |
-
-_... +101 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `region` — 121 public items (0 NAPI, 0 WASM)
-*crates/ruvix/crates/region*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `AppendOnlyRegion` | `crates/ruvix/crates/region/src/append_only.rs:22` |
-| `fn` | `new` | `crates/ruvix/crates/region/src/append_only.rs:49` |
-| `fn` | `append` | `crates/ruvix/crates/region/src/append_only.rs:73` |
-| `fn` | `read` | `crates/ruvix/crates/region/src/append_only.rs:112` |
-| `fn` | `read_all` | `crates/ruvix/crates/region/src/append_only.rs:137` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:144` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:151` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:158` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:165` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:172` |
-| `fn` | `fill_ratio` | `crates/ruvix/crates/region/src/append_only.rs:179` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/append_only.rs:190` |
-| `fn` | `as_slice` | `crates/ruvix/crates/region/src/append_only.rs:202` |
-| `fn` | `append_u64` | `crates/ruvix/crates/region/src/append_only.rs:208` |
-| `fn` | `append_u32` | `crates/ruvix/crates/region/src/append_only.rs:213` |
-| `fn` | `read_u64` | `crates/ruvix/crates/region/src/append_only.rs:218` |
-| `fn` | `read_u32` | `crates/ruvix/crates/region/src/append_only.rs:228` |
-| `trait` | `MemoryBacking` | `crates/ruvix/crates/region/src/backing.rs:16` |
-| `struct` | `HeapBacking` | `crates/ruvix/crates/region/src/backing.rs:42` |
-| `fn` | `new` | `crates/ruvix/crates/region/src/backing.rs:50` |
-| `struct` | `MmapBacking` | `crates/ruvix/crates/region/src/backing.rs:110` |
-| `fn` | `new` | `crates/ruvix/crates/region/src/backing.rs:118` |
-| `struct` | `StaticBacking` | `crates/ruvix/crates/region/src/backing.rs:188` |
-| `const` | `fn` | `crates/ruvix/crates/region/src/backing.rs:195` |
-| `fn` | `as_slice` | `crates/ruvix/crates/region/src/backing.rs:203` |
-
-_... +96 more — see `catalog/inventory-bootstrap.json`_
 
 
 ## `physmem` — 111 public items (0 NAPI, 0 WASM)
@@ -1261,40 +853,6 @@ _... +53 more — see `catalog/inventory-bootstrap.json`_
 _... +52 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `rvagent-subagents` — 76 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-subagents*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `fn` | `compile_subagents` | `crates/rvAgent/rvagent-subagents/src/builder.rs:31` |
-| `fn` | `excluded_state_keys` | `crates/rvAgent/rvagent-subagents/src/builder.rs:123` |
-| `fn` | `resolve_tools` | `crates/rvAgent/rvagent-subagents/src/builder.rs:129` |
-| `enum` | `MergeError` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:46` |
-| `struct` | `VectorClock` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:89` |
-| `fn` | `new` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:95` |
-| `fn` | `tick` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:102` |
-| `fn` | `merge` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:107` |
-| `fn` | `happens_before` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:117` |
-| `fn` | `get` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:142` |
-| `struct` | `LwwRegister` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:168` |
-| `fn` | `new` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:176` |
-| `fn` | `value` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:185` |
-| `fn` | `timestamp` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:190` |
-| `fn` | `node_id` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:195` |
-| `fn` | `should_win_over` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:202` |
-| `struct` | `CrdtState` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:239` |
-| `fn` | `new` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:247` |
-| `fn` | `set` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:256` |
-| `fn` | `get` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:264` |
-| `fn` | `clock` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:269` |
-| `fn` | `node_id` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:274` |
-| `fn` | `keys` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:279` |
-| `fn` | `merge` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:291` |
-| `fn` | `merge_subagent_results` | `crates/rvAgent/rvagent-subagents/src/crdt_merge.rs:343` |
-
-_... +51 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `rvm-partition` — 76 public items (0 NAPI, 0 WASM)
 *crates/rvm/crates/rvm-partition*
 
@@ -1429,40 +987,6 @@ _... +47 more — see `catalog/inventory-bootstrap.json`_
 | `fn` | `with_defaults` | `crates/rvm/crates/rvm-kernel/src/lib.rs:302` |
 
 _... +47 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `rvagent-tools` — 67 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-tools*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `EditFileTool` | `crates/rvAgent/rvagent-tools/src/edit_file.rs:9` |
-| `struct` | `ExecuteTool` | `crates/rvAgent/rvagent-tools/src/execute.rs:7` |
-| `struct` | `GlobTool` | `crates/rvAgent/rvagent-tools/src/glob.rs:7` |
-| `struct` | `GrepTool` | `crates/rvAgent/rvagent-tools/src/grep.rs:10` |
-| `mod` | `edit_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:6` |
-| `mod` | `execute` | `crates/rvAgent/rvagent-tools/src/lib.rs:7` |
-| `mod` | `glob` | `crates/rvAgent/rvagent-tools/src/lib.rs:8` |
-| `mod` | `grep` | `crates/rvAgent/rvagent-tools/src/lib.rs:9` |
-| `mod` | `ls` | `crates/rvAgent/rvagent-tools/src/lib.rs:10` |
-| `mod` | `read_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:11` |
-| `mod` | `task` | `crates/rvAgent/rvagent-tools/src/lib.rs:12` |
-| `mod` | `write_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:13` |
-| `mod` | `write_todos` | `crates/rvAgent/rvagent-tools/src/lib.rs:14` |
-| `use` | `edit_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:22` |
-| `use` | `execute` | `crates/rvAgent/rvagent-tools/src/lib.rs:23` |
-| `use` | `glob` | `crates/rvAgent/rvagent-tools/src/lib.rs:24` |
-| `use` | `grep` | `crates/rvAgent/rvagent-tools/src/lib.rs:25` |
-| `use` | `ls` | `crates/rvAgent/rvagent-tools/src/lib.rs:26` |
-| `use` | `read_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:27` |
-| `use` | `task` | `crates/rvAgent/rvagent-tools/src/lib.rs:28` |
-| `use` | `write_file` | `crates/rvAgent/rvagent-tools/src/lib.rs:29` |
-| `use` | `write_todos` | `crates/rvAgent/rvagent-tools/src/lib.rs:30` |
-| `struct` | `FileInfo` | `crates/rvAgent/rvagent-tools/src/lib.rs:38` |
-| `struct` | `WriteResult` | `crates/rvAgent/rvagent-tools/src/lib.rs:47` |
-| `struct` | `GrepMatch` | `crates/rvAgent/rvagent-tools/src/lib.rs:55` |
-
-_... +42 more — see `catalog/inventory-bootstrap.json`_
 
 
 ## `rvm-wasm` — 64 public items (0 NAPI, 0 WASM)
@@ -1669,40 +1193,6 @@ _... +33 more — see `catalog/inventory-bootstrap.json`_
 _... +33 more — see `catalog/inventory-bootstrap.json`_
 
 
-## `rvagent-cli` — 58 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-cli*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `A2aCommand` | `crates/rvAgent/rvagent-cli/src/a2a.rs:43` |
-| `enum` | `A2aAction` | `crates/rvAgent/rvagent-cli/src/a2a.rs:49` |
-| `struct` | `ServeArgs` | `crates/rvAgent/rvagent-cli/src/a2a.rs:59` |
-| `struct` | `DiscoverArgs` | `crates/rvAgent/rvagent-cli/src/a2a.rs:81` |
-| `struct` | `SendTaskArgs` | `crates/rvAgent/rvagent-cli/src/a2a.rs:87` |
-| `fn` | `run` | `crates/rvAgent/rvagent-cli/src/a2a.rs:113` |
-| `struct` | `App` | `crates/rvAgent/rvagent-cli/src/app.rs:427` |
-| `fn` | `new` | `crates/rvAgent/rvagent-cli/src/app.rs:446` |
-| `fn` | `run_once` | `crates/rvAgent/rvagent-cli/src/app.rs:499` |
-| `fn` | `run_interactive` | `crates/rvAgent/rvagent-cli/src/app.rs:519` |
-| `enum` | `TuiEvent` | `crates/rvAgent/rvagent-cli/src/app.rs:662` |
-| `fn` | `print_assistant_message` | `crates/rvAgent/rvagent-cli/src/display.rs:16` |
-| `fn` | `print_markdown` | `crates/rvAgent/rvagent-cli/src/display.rs:48` |
-| `fn` | `print_tool_call` | `crates/rvAgent/rvagent-cli/src/display.rs:107` |
-| `fn` | `print_tool_result` | `crates/rvAgent/rvagent-cli/src/display.rs:121` |
-| `fn` | `print_error` | `crates/rvAgent/rvagent-cli/src/display.rs:167` |
-| `fn` | `syntax_label` | `crates/rvAgent/rvagent-cli/src/display.rs:198` |
-| `struct` | `McpToolDef` | `crates/rvAgent/rvagent-cli/src/mcp.rs:22` |
-| `struct` | `McpServerConfig` | `crates/rvAgent/rvagent-cli/src/mcp.rs:35` |
-| `enum` | `McpTransport` | `crates/rvAgent/rvagent-cli/src/mcp.rs:48` |
-| `struct` | `McpToolCall` | `crates/rvAgent/rvagent-cli/src/mcp.rs:76` |
-| `struct` | `McpToolResult` | `crates/rvAgent/rvagent-cli/src/mcp.rs:85` |
-| `enum` | `McpContent` | `crates/rvAgent/rvagent-cli/src/mcp.rs:95` |
-| `fn` | `text_content` | `crates/rvAgent/rvagent-cli/src/mcp.rs:106` |
-| `struct` | `McpClient` | `crates/rvAgent/rvagent-cli/src/mcp.rs:123` |
-
-_... +33 more — see `catalog/inventory-bootstrap.json`_
-
-
 ## `rvm-boot` — 54 public items (0 NAPI, 0 WASM)
 *crates/rvm/crates/rvm-boot*
 
@@ -1905,40 +1395,6 @@ _... +25 more — see `catalog/inventory-bootstrap.json`_
 | `struct` | `ShellConfig` | `crates/ruvix/crates/shell/src/lib.rs:67` |
 
 _... +25 more — see `catalog/inventory-bootstrap.json`_
-
-
-## `rvagent-acp` — 46 public items (0 NAPI, 0 WASM)
-*crates/rvAgent/rvagent-acp*
-
-| Kind | Name | File:Line |
-|---|---|---|
-| `struct` | `Session` | `crates/rvAgent/rvagent-acp/src/agent.rs:30` |
-| `struct` | `AcpAgent` | `crates/rvAgent/rvagent-acp/src/agent.rs:111` |
-| `fn` | `new` | `crates/rvAgent/rvagent-acp/src/agent.rs:119` |
-| `fn` | `create_session` | `crates/rvAgent/rvagent-acp/src/agent.rs:127` |
-| `fn` | `list_sessions` | `crates/rvAgent/rvagent-acp/src/agent.rs:136` |
-| `fn` | `get_session` | `crates/rvAgent/rvagent-acp/src/agent.rs:142` |
-| `fn` | `delete_session` | `crates/rvAgent/rvagent-acp/src/agent.rs:148` |
-| `fn` | `prompt` | `crates/rvAgent/rvagent-acp/src/agent.rs:157` |
-| `fn` | `config` | `crates/rvAgent/rvagent-acp/src/agent.rs:242` |
-| `struct` | `ApiKeyState` | `crates/rvAgent/rvagent-acp/src/auth.rs:30` |
-| `fn` | `require_api_key` | `crates/rvAgent/rvagent-acp/src/auth.rs:38` |
-| `struct` | `RateLimiterState` | `crates/rvAgent/rvagent-acp/src/auth.rs:99` |
-| `fn` | `new` | `crates/rvAgent/rvagent-acp/src/auth.rs:108` |
-| `fn` | `try_acquire` | `crates/rvAgent/rvagent-acp/src/auth.rs:116` |
-| `fn` | `rate_limiter` | `crates/rvAgent/rvagent-acp/src/auth.rs:144` |
-| `fn` | `request_size_limit` | `crates/rvAgent/rvagent-acp/src/auth.rs:184` |
-| `struct` | `MaxBodySize` | `crates/rvAgent/rvagent-acp/src/auth.rs:219` |
-| `struct` | `RequireTls` | `crates/rvAgent/rvagent-acp/src/auth.rs:227` |
-| `fn` | `require_tls_middleware` | `crates/rvAgent/rvagent-acp/src/auth.rs:233` |
-| `mod` | `agent` | `crates/rvAgent/rvagent-acp/src/lib.rs:7` |
-| `mod` | `auth` | `crates/rvAgent/rvagent-acp/src/lib.rs:8` |
-| `mod` | `server` | `crates/rvAgent/rvagent-acp/src/lib.rs:9` |
-| `mod` | `types` | `crates/rvAgent/rvagent-acp/src/lib.rs:10` |
-| `struct` | `AcpConfig` | `crates/rvAgent/rvagent-acp/src/server.rs:40` |
-| `struct` | `AppState` | `crates/rvAgent/rvagent-acp/src/server.rs:79` |
-
-_... +21 more — see `catalog/inventory-bootstrap.json`_
 
 
 ## `aarch64` — 42 public items (0 NAPI, 0 WASM)

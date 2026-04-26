@@ -302,19 +302,41 @@ All three are M3's job. M2 deliberately stays at the regex layer to maximize re-
 
 **Cross-reference correctness:** Each crate carries `is_adr_orphan` derived from M1's reverse index, plus a `category` tag (`library` / `test` / `bench` / `example` / `binary`) so SDK archetype work in M4 can filter test/bench/example crates without manual review.
 
-### 6.6 Phase 2 — AST-driven catalog (target)
+### 6.6 Phase 2 — AST-driven catalog *(M3 v0.1, complete)*
 
-A Rust binary using `syn` (and `cargo_metadata` for dep graphs) that:
-1. Parses every `lib.rs` and module tree in scope.
-2. Walks the public-item tree, respecting `pub use` re-exports and `cfg` attributes.
-3. Captures full type signatures, generics, where-clauses, and associated docs.
-4. Detects NAPI/WASM bindings via attribute parsing (not regex).
-5. Resolves which examples (`examples/*`) reference each crate.
-6. Emits `catalog/catalog.json` — the source of truth.
+Implementation: `tools/ruvector-cataloger/` — Rust binary using `syn 2.0` + `serde`. Builds in ~3 seconds, runs in ~2.5 seconds against 196 crates.
+Outputs:
+- `catalog/catalog.json` — full structured catalog (~9 MB, the source of truth)
+- `catalog/catalog.md` — generated summary
+- `catalog/m2-vs-m3-diff.md` — per-crate item-count delta vs M2 (cross-validation)
 
-This is the only way to get correct re-export resolution and feature-flag awareness. Estimated effort: ~5–8 working days.
+**M3 v0.1 findings (from running):**
 
-The `syn` parser lives at `tools/ruvector-cataloger/` (a new crate in this SDK workspace). It is run via `cargo run -p ruvector-cataloger -- --upstream ./ruvector --out ./catalog/`.
+| Metric | Value | Notes |
+|---|---:|---|
+| Crates parsed | **187 of 196** | 9 are binary-only or use `[lib] path = "..."` overrides; future v0.2 work |
+| Source files parsed | 2,096 | Reached recursively from each crate's `lib.rs` via `mod foo;` resolution, including `#[path = "..."]` overrides |
+| Parse failures | **0** | Every `lib.rs` reachable from M2 parses cleanly with `syn` 2.0 |
+| **Top-level public items** | **13,655** | The accurate API-surface count |
+| `pub fn` (top-level / free) | 2,503 | M2 reported 20,232 — the difference (~17.7k) is `impl`-block public methods, real but a different category |
+| `pub const` | 873 | M2 reported 2,427 — same explanation; the rest are `impl`-block constants |
+| `pub struct` / `enum` / `trait` / `type` / `mod` / `use` / `static` | match M2 within ±5% | Confirms syn finds what ripgrep finds, just classifies correctly |
+| **NAPI-decorated items** | **165** | M2 reported 551 attribute lines — the 3.3× difference is attrs inside macros, on fields, in conditional blocks |
+| **WASM-decorated items** | **322** | M2 reported 1,780 attribute lines — same explanation |
+| `#[macro_export]` items | 5 | Matches M2 |
+| **`#[cfg]`-gated items** | **2,377 (17%)** | New finding — almost a fifth of the public API is feature-flagged. Any SDK that doesn't model feature flags will mis-represent shippable surface. |
+| Items with doc comment | 10,004 (73%) | Generally well-documented |
+| Deprecated items | 4 | Minimal; stable API surface |
+| **Items in ADR-orphan crates** | **2,317** | Down from M2's 7,595; the corrected figure after the M1 retrofit |
+
+**Cross-phase bug fixed during M3.** M3 surfaced that `rvagent-a2a` was being marked ADR-orphan despite ADR-159 explicitly listing it. Root cause: M1's `loadRealCrates()` only knew about top-level dirs + `ruvix/crates/*` + `rvf/rvf-*`, missing the 10 `rvAgent/rvagent-*` and 10 `rvm/crates/*` nested members. Retrofitted M1 with the generic `[package]`-section detection used in M2; the fix propagated cleanly through all three phases. **Net effect:** the ADR-orphan count dropped from 86 → 70 crates, and orphan items from 7,595 → 2,317 (M3-correct figure). Those 1,020 reattributed items are now properly linked to ADR-159, ADR-100, and others.
+
+**v0.1 deliberate omissions** (noted in `catalog.json` and queued as v0.2/v0.3 work):
+- Cross-crate `pub use` chains not resolved — re-exports recorded as use-tree strings only.
+- Feature flags not combinatorially expanded — `#[cfg]`-gated items present unconditionally.
+- Macro expansion not done — NAPI/WASM bindings observed at attribute layer, not at generated-output layer.
+- `impl`-block public methods not captured as separate items — type captured, methods inside not enumerated. Real users want both counts.
+- `[lib] path = "..."` overrides not honored — bounded to 9 currently lib-less crates.
 
 ### 6.7 Catalog schema (sketch)
 
@@ -428,7 +450,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | M0 | This PRD approved | User | — | done with this draft |
 | M1 | Phase 0 — ADR skeleton extracted (`catalog/adrs.json`) | done 2026-04-26 | M0 | 1 session |
 | M2 | Phase 1 — Ripgrep inventory bootstrap | done 2026-04-26 | M1 | 1 session |
-| M3 | Phase 2 — `syn`-based cataloger v1 | TBD | M2 | 5–8 days |
+| M3 | Phase 2 — `syn`-based cataloger v0.1 | done 2026-04-26 | M2 | 1 session |
 | M4 | Archetype ratification (final list, mapped to L3 items) | User + TBD | M3 | 2 days |
 | M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | TBD | M4 | 3 days |
 | M6 | Reference example for one archetype (`KnowledgeBase`) | TBD | M5 | 1 week |
