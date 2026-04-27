@@ -194,6 +194,31 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M11.3 v0.2 (CLI surface-contract probing; codifies the M12.2 lesson)
+
+`tools/reprobe-bindings/reprobe.mjs` extended with a `CLI_PROBES` table. For each tracked binary, the script spawns `<bin> --help` and regex-tests two sets of expectations:
+
+- **`expectAbsent`**: substrings/regex that should NOT appear. Drift if any does — typically signals upstream shipped a load-bearing feature the SDK has been waiting on (e.g., `ruvllm --model` flag → reconsider Phase 2B deferral).
+- **`expectPresent`**: substrings/regex that SHOULD appear. Drift if missing — contract regression on a surface the SDK already uses.
+
+Initial entry: `ruvllm` with 4 absent (`--model`, `serve`, `load-model`, `--gguf`) + 6 present (`query`, `generate`, `route`, `models`, `embed`, `similarity`). Live result: 0 drift; the M12.2 deferral is still consistent with what's published.
+
+**Both drift paths verified by inversion**: flipping `query` from `expectPresent` to `expectAbsent` produced `absent-appeared: /\bquery\b/` with action message "Upstream shipped a feature the SDK was waiting on — re-evaluate the deferred milestone"; adding a fake `nonexistent-subcommand-for-drift-test` to `expectPresent` produced `present-missing: ...` with action message "Contract regression — SDK code that depended on this surface needs review." Same exit-1 behavior on either drift kind. Restored after.
+
+**Three lessons now codified into one tool**:
+
+| Lesson | Source | Codification |
+|---|---|---|
+| Re-probe npm publication status before trusting earlier scoping | M11 → M11.3 | `PROBES` table + `npm view` per entry |
+| Re-probe binding internals (TypeScript declarations) before trusting advertised behavior | M12.1 | Read `dist/cjs/native.js` source map directly during scoping (not yet automated) |
+| Re-probe CLI `--help` surface before trusting advertised CLI flags | M12.2 → M11.3 v0.2 | `CLI_PROBES` table + `<bin> --help` regex per entry |
+
+The middle row is the only one not in `reprobe.mjs`. Reading TypeScript declarations programmatically is harder (would need `@ruvector/ruvllm/dist/...` introspection past the package-exports gate; M12 found that gate is closed). Logged as a v0.3 work-item; lower priority than CLI probing because M12.1 already settled the relevant claims for now.
+
+**Output format**: two tables (NPM + CLI), single combined drift block at the bottom in paste-ready Markdown. Exit code 1 if either dimension drifts; exit 0 only when both are clean. CI-gateable as a single check.
+
+**Cadence recommendation unchanged**: re-run at every milestone close, OR any time scoping touches an `upstream-binding` / `upstream-bug` classification, OR any time scoping cites a CLI flag/subcommand from earlier docs.
+
 ## Update — M12.2 deferral (CLI shares NAPI's model-loading defect; my M11/M12 claim about ruvllm CLI was wrong)
 
 Live re-probing of `node_modules/.bin/ruvllm --help` and `node_modules/@ruvector/ruvllm/bin/cli.js` overturns the claims that grounded M12.2 (Phase 2B CLI subprocess transport). **Both M11 scoping and M12 scoping cited a `--model` flag and a `serve` subcommand that do not exist in the actually-installed `@ruvector/ruvllm@2.5.4` CLI.** The CLI source constructs `new RuvLLM()` (line 229) or `new RuvLLM({ embeddingDim: 768, learningEnabled: false })` (line 877) with no model path; it shares the same broken-default-model defect as the in-process NAPI path probed in M12.1.
