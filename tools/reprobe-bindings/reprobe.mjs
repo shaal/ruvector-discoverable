@@ -59,6 +59,21 @@ const PROBES = [
   { pkg: '@ruvector/delta-node',            expect: 'unpublished', notes: 'TimeSeriesMemory.deltaIndexing' },
   { pkg: '@ruvector/tiny-dancer-node',      expect: 'unpublished', notes: 'LocalLLM.tinyDancerRouting' },
   { pkg: '@ruvector/sparse-inference-node', expect: 'unpublished', notes: 'LocalLLM.sparseInference' },
+
+  // ===== rvagent family (Issue #07; added M15.1 v0.3) =====
+  // 0 of 9 named bindings published per the M14 reprobe. AgentFramework
+  // ships its 4-protocol catalog with mcp/a2a/acp dormant `[upstream-binding]`
+  // gated on these. When upstream publishes any one, the next reprobe
+  // surfaces drift and recommends reclassification.
+  { pkg: '@ruvector/rvagent-core',          expect: 'unpublished', notes: 'AgentFramework — entire family unpublished per Issue #07' },
+  { pkg: '@ruvector/rvagent-a2a',           expect: 'unpublished', notes: 'AgentFramework.a2a (ADR-159)' },
+  { pkg: '@ruvector/rvagent-mcp',           expect: 'unpublished', notes: 'AgentFramework.mcp (ADR-108)' },
+  { pkg: '@ruvector/rvagent-acp',           expect: 'unpublished', notes: 'AgentFramework.acp' },
+  { pkg: '@ruvector/rvagent-middleware',    expect: 'unpublished', notes: 'AgentFramework — middleware layer' },
+  { pkg: '@ruvector/rvagent-backends',      expect: 'unpublished', notes: 'AgentFramework — backend integrations' },
+  { pkg: '@ruvector/rvagent-tools',         expect: 'unpublished', notes: 'AgentFramework — tool registry' },
+  { pkg: '@ruvector/rvagent-subagents',     expect: 'unpublished', notes: 'AgentFramework — subagent dispatch (SDK ships own)' },
+  { pkg: '@ruvector/rvagent-cli',           expect: 'unpublished', notes: 'AgentFramework — CLI binary' },
 ];
 
 // =====================================================================

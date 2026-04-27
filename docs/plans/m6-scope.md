@@ -194,6 +194,38 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M15.1 outcome (`doctor` ships; CLI surface lives)
+
+`packages/sdk/src/cli/doctor.ts` + `packages/sdk/bin/sdk.js` + `package.json#bin` ship as Phase-1A. `npx sdk doctor <config-path>` introspects a running SDK config and reports degradations end-to-end.
+
+**Live demo result** (3 archetypes wired in `examples/sample-config.ts`):
+
+```
+Aggregate value report (3 archetypes):
+  31 unique capabilities total: 13 active, 18 dormant.
+  Dormant breakdown: 10 upstream-binding, 4 upstream-bug, 1 sdk-integration, 3 design-deferred.
+
+Suggestions (1):
+  • [KnowledgeBase.sona] await KnowledgeBase.create({ ..., sona: true })
+```
+
+**The M9.1 four-blocker classification reaches its 5th payoff layer** (was at 4 in the M15 scoping doc): demos → upstream-issue authoring → SDK probe diagnostics → CLI surfacing → **CLI suggestion-extraction** (the dormant `[sdk-integration]` rows' `enable` strings are now actionable advice in `doctor`'s output). The `enable` string the SDK already produces *is* the suggestion text; doctor doesn't synthesize, it surfaces.
+
+**Caught a path-resolution bug inline**: first-pass `examples/sample-config.ts` imported from `'../src/index.js'` (the TypeScript path; doesn't exist at runtime). Real users would `import from '@ruvector/sdk'`; the in-repo demo needs `'../dist/index.js'`. Fixed with an explanatory comment.
+
+**TS-strip fallback path verified**: running `node bin/sdk.js doctor examples/sample-config.ts` (without `--experimental-strip-types`) produces the actionable error naming three workarounds (npx tsx, tsc precompile, Node upgrade). Same self-correcting-error pattern as M12.5's probe diagnostics.
+
+**`reprobe.mjs` v0.3 ships in the same commit**: 9 `@ruvector/rvagent-*` rows added per Issue #07's paste-ready table. The script now tracks 22 npm + 1 CLI; M14's worst-publication-ratio finding is now a permanent monitoring entry. When upstream publishes any of the 9, the next reprobe surfaces drift and recommends the integrating SDK's reclassification action.
+
+**M8.2 diff**: all 7 existing demos byte-stable modulo nondeterminism (timestamps, random probe IDs, kHop iteration order, tied-cosine ordering, FP variance). `doctor`'s output is the only new artifact.
+
+**Project state**: 6 of 6 archetypes implemented; first CLI subcommand shipped. The recommend/audit subcommands remain Phase-1B/2 per `m15-scope.md`'s phased plan. v0.2 work-items captured inline:
+- Single-pass cleanup walk in doctor (current dual-pass is idempotent but sloppy).
+- `.js` config path support for non-TS-strip Node setups (already works via `import()`'s content-agnostic resolution).
+- Re-exec-with-flag in the bin script for Node 22.x convenience.
+
+`docs/upstream-issues/README.md` references unchanged from M15 scoping (M6 → M14 still accurate; the M15.1 doctor surfaces existing issues but doesn't author new ones).
+
 ## Update — M15 scoping (recommend / doctor / audit CLI; PRD §5.5)
 
 `docs/plans/m15-scope.md` filed plus `docs/upstream-issues/07-rvagent-family-unpublished.md` as a parallel quick win. With the archetype frontier closed (M14.1), the SDK's center-of-gravity shifts to user-discovery — PRD §5.5's CLI is the next milestone.

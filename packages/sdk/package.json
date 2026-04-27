@@ -15,8 +15,12 @@
       "types": "./dist/advanced/index.d.ts"
     }
   },
+  "bin": {
+    "sdk": "./bin/sdk.js"
+  },
   "files": [
     "dist",
+    "bin",
     "README.md"
   ],
   "scripts": {
