@@ -27,7 +27,13 @@ function pseudoEmbed(seed) {
 console.log('Opening GraphReasoner (in-memory, dims=' + DIMS + ')...');
 const g = await GraphReasoner.create({ dimensions: DIMS, distanceMetric: 'Cosine' });
 
-console.log('\n[0] Health check (isolated probe — no user data touched):');
+console.log('\n[0a] Value report BEFORE healthCheck — declared only:');
+const beforeReport = await g.getValueReport();
+console.log(`  source: ${beforeReport.healthSource}`);
+console.log(`  ${beforeReport.summary}`);
+console.log(`  cypher dormant reason: "${beforeReport.dormant.find(d => d.name === 'cypher')?.reason ?? '(not dormant)'}"`);
+
+console.log('\n[0b] Health check (isolated probe — no user data touched):');
 const health = await g.healthCheck();
 console.log(`  ${health.summary}`);
 for (const c of health.checks) {
@@ -87,8 +93,13 @@ const result = await g.cypher('MATCH (u:User)-[:OWNS]->(d:Doc) RETURN u, d');
 console.log(`  result: ${result.nodes.length} nodes, ${result.edges.length} edges (expected 0/0 in v0.1)`);
 console.log(`  explain: ${JSON.stringify(result.explain.stages[0]?.note)}`);
 
-console.log('\nValue report:');
+// Before the health check ran (oh wait — it did, at step [0]).
+// Show the report twice would be theatrical; demonstrate instead by reading
+// the cached observation source explicitly.
+console.log('\nValue report (consults cached healthCheck from step [0]):');
 const vr = await g.getValueReport();
+console.log(`  source:      ${vr.healthSource}`);
+console.log(`  measured at: ${vr.lastHealthCheckAt ?? '(never — declared only)'}`);
 console.log(`  ${vr.summary}`);
 console.log(`  active:`);
 for (const a of vr.active) console.log(`    ✓ ${a.name.padEnd(22)} ${a.invocations} invocations  [${a.source}]`);

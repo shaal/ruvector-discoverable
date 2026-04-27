@@ -17,6 +17,17 @@ export interface ValueReport {
    * Populated when the report is generated; consumers may also derive their own.
    */
   readonly summary?: string;
+  /**
+   * Whether the dormant list was derived from observation (a recent healthCheck),
+   * from static declaration, or a mix of both. Lets consumers tell "we measured this"
+   * apart from "we said this in code." See M6.2.
+   */
+  readonly healthSource: 'observed' | 'declared' | 'mixed';
+  /**
+   * ISO-8601 timestamp of the healthCheck whose results this report consulted,
+   * if any. Absent when `healthSource` is `'declared'`.
+   */
+  readonly lastHealthCheckAt?: string;
 }
 
 export interface ActiveCapability {

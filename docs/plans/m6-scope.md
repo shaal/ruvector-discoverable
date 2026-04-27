@@ -194,6 +194,33 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M6.2 outcome (value report → observation)
+
+The v0.2 wiring item from M6.1 has shipped:
+
+- `ValueReport` extended with `healthSource: 'observed' | 'declared' | 'mixed'` and optional `lastHealthCheckAt`.
+- `GraphReasoner` reorganized around a single `CAPABILITY_CATALOG` source of truth. Each entry declares default status + optional `probeName` mapping into the smoke-check result.
+- `healthCheck()` caches its result on the instance; subsequent `getValueReport()` and `introspect()` calls consult the cache.
+- For probed capabilities, observed status overrides declared status. Dormant reasons quote the probe's own diagnostic (`[observed via probe 'cypher', status=broken] ...`) instead of a hardcoded string.
+
+Demo now shows the contrast explicitly:
+
+```
+[0a] Value report BEFORE healthCheck — declared only:
+  source: declared
+  cypher dormant reason: "STUB UPSTREAM (declared): ..."
+
+[0b] healthCheck runs, 5 ok / 1 broken in 0.79 ms.
+
+Value report AFTER:
+  source: mixed (4/8 observed)
+  cypher dormant reason: "[observed via probe 'cypher', status=broken]
+                          MATCH (n) RETURN n returned 0 nodes despite
+                          stats showing 2."
+```
+
+Self-correcting property: when upstream fixes the Cypher engine, the next `healthCheck()` reports `cypher: ok`, the catalog reducer moves it from dormant to active, and the value report tells the new truth with zero SDK code change.
+
 ## Findings worth surfacing regardless of M6 path
 
 These came out of the scoping pass and matter for the broader project:

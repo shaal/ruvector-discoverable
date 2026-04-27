@@ -34,7 +34,7 @@
 import type { BackendSpec } from '../core/backend.js';
 import type { ExplainTrace } from '../core/explain.js';
 import type { Pipeline } from '../core/pipeline.js';
-import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
+import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { HealthCheckProvider, HealthCheckResult } from '../core/health.js';
 import { NotImplementedError, RuVectorError, summarize } from '../core/index.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
@@ -138,12 +138,111 @@ export type GraphChangeListener = (change: unknown) => void;
 
 // ---------------- Implementation ----------------
 
+// Static capability catalog — the single source of truth for which capabilities
+// the archetype claims. Each entry declares an a-priori `defaultStatus` (used
+// when no observation is available) plus an optional `probeName` mapping into
+// the smoke-check result (M6.1). When a probe exists and a healthCheck has
+// run, the observed status overrides the declared one.
+//
+// Capabilities without a `probeName` (e.g. sublinearPageRank — no published
+// NAPI binding to probe) stay declarative and feed `healthSource = 'declared'`
+// or `'mixed'` accordingly.
+
+type CapabilityCatalogEntry = {
+  readonly name: string;
+  readonly source: string;
+  readonly adrs?: readonly string[];
+  readonly probeName?: string; // matches a CheckResult.name from smokeCheck
+  readonly defaultStatus: 'active' | 'dormant';
+  readonly defaultDormantReason?: string;
+  readonly defaultDormantLift?: string;
+  readonly defaultDormantEnable?: string;
+  /** Maps an `invocationCounts` key to populate `ActiveCapability.invocations`. */
+  readonly invocationKey?: string;
+};
+
+const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
+  {
+    name: 'kHopTraversal',
+    source: 'ruvector-graph',
+    adrs: ['ADR-046'],
+    probeName: 'kHopNeighbors',
+    defaultStatus: 'active',
+    invocationKey: 'kHopNeighbors',
+  },
+  {
+    name: 'hyperedgeSearch',
+    source: 'ruvector-graph',
+    adrs: ['ADR-046'],
+    probeName: 'hyperedgeSearch',
+    defaultStatus: 'active',
+    invocationKey: 'searchHyperedges',
+  },
+  {
+    name: 'graphStats',
+    source: 'ruvector-graph',
+    probeName: 'stats',
+    defaultStatus: 'active',
+    invocationKey: 'stats',
+  },
+  {
+    name: 'cypher',
+    source: 'ruvector-graph',
+    adrs: ['ADR-046', 'ADR-047'],
+    probeName: 'cypher',
+    // Declared dormant in v0.1 because we already know the upstream binding's
+    // query() is a stub. The smoke check confirms this from observation; if
+    // upstream ships 2.0.4 with a working engine, the observation will flip
+    // this to active without any code change here.
+    defaultStatus: 'dormant',
+    defaultDormantReason: 'STUB UPSTREAM (declared): @ruvector/graph-node@2.0.3 query() returns empty results. Run healthCheck() to confirm against the live binding.',
+    defaultDormantLift: 'Cypher pattern matching for arbitrary multi-hop queries.',
+    defaultDormantEnable: 'File upstream issue or wait for binding fix; meanwhile use kHopNeighbors + searchHyperedges.',
+    invocationKey: 'cypher',
+  },
+  {
+    name: 'sublinearPageRank',
+    source: 'ruvector-solver',
+    adrs: ['ADR-044', 'ADR-046'],
+    defaultStatus: 'dormant',
+    defaultDormantReason: 'No published NAPI binding for ruvector-solver in this SDK version (v0.1).',
+    defaultDormantLift: 'O(log n) PageRank for graphs > 100k nodes; otherwise irrelevant.',
+    defaultDormantEnable: 'Track @ruvector/solver-node publishing, or use the http backend.',
+  },
+  {
+    name: 'leidenCommunities',
+    source: 'ruvector-graph',
+    adrs: ['ADR-046'],
+    defaultStatus: 'dormant',
+    defaultDormantReason: 'Implementation exists upstream but is not exposed in @ruvector/graph-node@2.0.3.',
+    defaultDormantLift: '30-60% better recall on multi-hop queries via community-aware retrieval.',
+    defaultDormantEnable: 'File upstream issue to expose Leiden in the NAPI surface, or implement via http backend.',
+  },
+  {
+    name: 'graphSparsifier',
+    source: 'ruvector-sparsifier',
+    defaultStatus: 'dormant',
+    defaultDormantReason: 'No published NAPI binding for ruvector-sparsifier in this SDK version (v0.1).',
+    defaultDormantLift: 'O(n log n) edges instead of O(n²) for very dense graphs.',
+    defaultDormantEnable: 'Track upstream publishing, or use the http backend.',
+  },
+  {
+    name: 'mincutGating',
+    source: 'ruvector-mincut-gated-transformer',
+    defaultStatus: 'dormant',
+    defaultDormantReason: 'No published NAPI binding (v0.1).',
+    defaultDormantLift: 'Dynamic attention pruning for traversal-heavy queries.',
+    defaultDormantEnable: 'Track upstream publishing.',
+  },
+];
+
 export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // Internal state. Public API hides the backend.
   private readonly _backend: NativeGraphBackend;
   private readonly _options: GraphReasonerOptions;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
+  private _lastHealth: HealthCheckResult | null = null;
 
   private constructor(backend: NativeGraphBackend, options: GraphReasonerOptions) {
     this._backend = backend;
@@ -295,76 +394,94 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // ----- Cross-cutting -----
 
   async getValueReport(): Promise<ValueReport> {
-    const inv = (name: string) => this._invocationCounts.get(name) ?? 0;
-    return {
+    const inv = (key: string | undefined) => (key ? this._invocationCounts.get(key) ?? 0 : 0);
+    const lastChecks = this._lastHealth?.checks ?? [];
+    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
+
+    const active: ActiveCapability[] = [];
+    const dormant: DormantCapability[] = [];
+    let probedCount = 0;
+    let unprobedCount = 0;
+
+    for (const cap of CAPABILITY_CATALOG) {
+      const probe = cap.probeName ? probesByName.get(cap.probeName) : undefined;
+      const isObserved = probe !== undefined;
+      if (isObserved) probedCount++;
+      else unprobedCount++;
+
+      // Decide active vs dormant. Observed > declared.
+      const observedActive = probe?.status === 'ok';
+      const observedDormant = probe && probe.status !== 'ok';
+      const isActive = observedActive || (!observedDormant && cap.defaultStatus === 'active');
+
+      if (isActive) {
+        active.push({
+          name: cap.name,
+          source: cap.source,
+          invocations: inv(cap.invocationKey),
+          ...(cap.adrs && { adrs: cap.adrs }),
+        });
+        continue;
+      }
+
+      // Dormant — prefer the observed diagnostic when we have one.
+      const reason = observedDormant && probe
+        ? `[observed via probe '${probe.name}', status=${probe.status}] ${probe.detail ?? '(no detail)'}`
+        : (cap.defaultDormantReason ?? 'No reason recorded.');
+      dormant.push({
+        name: cap.name,
+        source: cap.source,
+        reason,
+        expectedLift: cap.defaultDormantLift ?? 'Lift not documented.',
+        enable: cap.defaultDormantEnable ?? 'See archetype documentation.',
+        ...(cap.adrs && { adrs: cap.adrs }),
+      });
+    }
+
+    const healthSource: ValueReport['healthSource'] =
+      probedCount === 0 ? 'declared'
+        : unprobedCount === 0 ? 'observed'
+          : 'mixed';
+
+    const totalCaps = CAPABILITY_CATALOG.length;
+    const sourceTag = healthSource === 'observed' ? 'observed'
+      : healthSource === 'declared' ? 'declared (run healthCheck() for live data)'
+        : `mixed (${probedCount}/${totalCaps} observed)`;
+    const summary = `${active.length} of ${totalCaps} unique capabilities active. ${dormant.length} dormant — ${sourceTag}.`;
+
+    const result: ValueReport = {
       generatedAt: new Date().toISOString(),
-      active: [
-        { name: 'kHopTraversal',    source: 'ruvector-graph', invocations: inv('kHopNeighbors'),   adrs: ['ADR-046'] },
-        { name: 'hyperedgeSearch',  source: 'ruvector-graph', invocations: inv('searchHyperedges'), adrs: ['ADR-046'] },
-        { name: 'graphStats',       source: 'ruvector-graph', invocations: inv('stats') },
-      ],
-      dormant: [
-        {
-          name: 'cypher',
-          source: 'ruvector-graph',
-          reason: 'STUB UPSTREAM: @ruvector/graph-node@2.0.3 query() always returns empty results. ' +
-                  'Inserts, k-hop, hyperedge search, and stats work; only Cypher query execution is non-functional.',
-          expectedLift: 'Cypher pattern matching for arbitrary multi-hop queries.',
-          enable: 'File upstream issue or wait for binding fix; meanwhile use kHopNeighbors + searchHyperedges.',
-          adrs: ['ADR-046', 'ADR-047'],
-        },
-        {
-          name: 'sublinearPageRank',
-          source: 'ruvector-solver',
-          reason: 'No published NAPI binding for ruvector-solver in this SDK version (v0.1).',
-          expectedLift: 'O(log n) PageRank for graphs > 100k nodes; otherwise irrelevant.',
-          enable: 'Track @ruvector/solver-node publishing, or use the http backend.',
-          adrs: ['ADR-044', 'ADR-046'],
-        },
-        {
-          name: 'leidenCommunities',
-          source: 'ruvector-graph',
-          reason: 'Implementation exists upstream but is not exposed in @ruvector/graph-node@2.0.3.',
-          expectedLift: '30-60% better recall on multi-hop queries via community-aware retrieval.',
-          enable: 'File upstream issue to expose Leiden in the NAPI surface, or implement via http backend.',
-          adrs: ['ADR-046'],
-        },
-        {
-          name: 'graphSparsifier',
-          source: 'ruvector-sparsifier',
-          reason: 'No published NAPI binding for ruvector-sparsifier in this SDK version (v0.1).',
-          expectedLift: 'O(n log n) edges instead of O(n²) for very dense graphs.',
-          enable: 'Track upstream publishing, or use the http backend.',
-        },
-        {
-          name: 'mincutGating',
-          source: 'ruvector-mincut-gated-transformer',
-          reason: 'No published NAPI binding (v0.1).',
-          expectedLift: 'Dynamic attention pruning for traversal-heavy queries.',
-          enable: 'Track upstream publishing.',
-        },
-      ],
-      summary: '3 of 8 unique capabilities active (kHopTraversal, hyperedgeSearch, graphStats). 5 dormant — including Cypher (stub upstream) and 4 awaiting NAPI publishing.',
+      active,
+      dormant,
+      summary,
+      healthSource,
+      ...(this._lastHealth && { lastHealthCheckAt: this._lastHealth.generatedAt }),
     };
+    return result;
   }
 
   introspect(): Pipeline {
+    const lastChecks = this._lastHealth?.checks ?? [];
+    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
     return {
       archetype: 'GraphReasoner',
-      stages: [
-        { name: 'kHopTraversal',   source: 'ruvector-graph', required: false },
-        { name: 'hyperedgeSearch', source: 'ruvector-graph', required: false },
-      ],
-      capabilities: [
-        { name: 'kHopTraversal',    source: 'ruvector-graph',          active: true,  adrs: ['ADR-046'] },
-        { name: 'hyperedgeSearch',  source: 'ruvector-graph',          active: true,  adrs: ['ADR-046'] },
-        { name: 'graphStats',       source: 'ruvector-graph',          active: true },
-        { name: 'cypher',           source: 'ruvector-graph',          active: false, adrs: ['ADR-046', 'ADR-047'] },
-        { name: 'sublinearPageRank', source: 'ruvector-solver',        active: false, adrs: ['ADR-044'] },
-        { name: 'leidenCommunities', source: 'ruvector-graph',         active: false, adrs: ['ADR-046'] },
-        { name: 'graphSparsifier',  source: 'ruvector-sparsifier',     active: false },
-        { name: 'mincutGating',     source: 'ruvector-mincut-gated-transformer', active: false },
-      ],
+      stages: CAPABILITY_CATALOG.filter((c) => c.probeName).map((c) => ({
+        name: c.name,
+        source: c.source,
+        required: false,
+      })),
+      capabilities: CAPABILITY_CATALOG.map((c) => {
+        const probe = c.probeName ? probesByName.get(c.probeName) : undefined;
+        const observedActive = probe?.status === 'ok';
+        const observedDormant = probe && probe.status !== 'ok';
+        const active = observedActive || (!observedDormant && c.defaultStatus === 'active');
+        return {
+          name: c.name,
+          source: c.source,
+          active,
+          ...(c.adrs && { adrs: c.adrs }),
+        };
+      }),
     };
   }
 
@@ -375,11 +492,17 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
    * known input and the result classified as `ok` / `broken` / `unsupported`
    * / `error`. Idempotent — run any time. The Cypher-stub from M6 v0.1
    * surfaces as `broken` here automatically.
+   *
+   * The result is cached on the archetype instance so subsequent calls to
+   * `getValueReport()` and `introspect()` consult observation rather than
+   * the static catalog. Cached result is reset only by another `healthCheck()`
+   * call (it does not auto-expire — backend behavior is presumed stable).
    */
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
     const checks = await NativeGraphBackend.smokeCheck();
-    return summarize('GraphReasoner', 'native', checks);
+    this._lastHealth = summarize('GraphReasoner', 'native', checks);
+    return this._lastHealth;
   }
 
   async close(): Promise<void> {
