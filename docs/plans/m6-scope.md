@@ -194,6 +194,26 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M10.2 outcome (upstream issues authored)
+
+With `sdk-integration` empty, the next-highest-leverage move was externalizing what the SDK's diagnostic infrastructure had already discovered. Four paste-ready upstream bug reports authored in `docs/upstream-issues/`:
+
+1. `01-graph-node-cypher-stub.md` — `@ruvector/graph-node@2.0.3`'s `query()` returns empty for any input.
+2. `02-broken-umbrella-packages.md` — `ruvector@0.2.23` and `@ruvector/sona@0.1.6` publish without their `main`-referenced files.
+3. `03-core-vectordb-construction-quirks.md` — `@ruvector/core` VectorDb shared state, dimension singleton, and default-storage-to-disk.
+4. `04-sona-microlora-warmup.md` — `applyMicroLora` returns a **zero vector** before any training (sharper than M10's "perturbs non-trivially" framing — the reproducer-while-writing produced verbatim `cos = 0.0000`).
+
+Each report's "Detection by an integrating SDK" section is verbatim from the SDK's `getValueReport().dormant[i].reason` strings — the smoke-check + value-report infrastructure built across M6.1/M6.2/M8.1 doubles as bug-report-evidence infrastructure with zero rewriting cost.
+
+Filing: I authored markdown but did not file the GitHub issues. User can paste each report's body into https://github.com/ruvnet/ruvector/issues. The README in `docs/upstream-issues/` explains the procedure.
+
+If upstream addresses Issues #1, #2, or #4, the SDK's value reports should observe the change and reclassify the affected dormant entries automatically:
+- Cypher fix: `cypher` probe flips `broken → ok`; capability moves to active in GraphReasoner.
+- Umbrella fix: SDK can simplify its binding-resolution code; no value-report change but cleaner integration.
+- SONA `applyMicroLora` fix: KB demo's `score=1.00e+0` collapse goes away; tier-3 sona probe could add a stronger assertion (`cos(x, applyMicroLora(x)) > 0.95 before training`).
+
+The drift report (`m6-scope.md` itself) and the upstream-issue reports are now the SDK's two channels for surfacing what it found: `m6-scope.md` for the SDK's own roadmap; `docs/upstream-issues/` for upstream's.
+
 ## Update — M10.1 outcome (changepoint baseline; project `sdk-integration` count now 0)
 
 The last `sdk-integration` dormant capability flips to active. `TimeSeriesMemory.detectChangepoints()` and `query({ changepoints: true })` now run a real sliding-window mean-shift detector instead of throwing `NotImplementedError`. **Project-wide `sdk-integration` count: 1 → 0.**
