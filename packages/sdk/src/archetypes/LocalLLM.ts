@@ -28,6 +28,8 @@ import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import type { BackendSpec } from '../core/backend.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, summarize } from '../core/index.js';
 import { NativeRuvllmBackend } from '../backends/native-ruvllm.js';
+import { WasmLocalLLMBackend } from '../backends/wasm-ruvllm.js';
+import type { ChatMessage, ChatTemplateName, HnswRouter, LocalLLMBackend } from '../backends/localllm-backend.js';
 
 // ---------------- Public types ----------------
 
@@ -237,29 +239,91 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantLift: '2-10x faster inference on edge by activating only needed neurons.',
     defaultDormantEnable: 'Track upstream NAPI publishing.',
   },
+  // ===== WASM-only capabilities (M17.2; gated on transport === 'wasm') =====
+  // The WASM binding ships chat-template formatting and HNSW routing that
+  // NAPI lacks. Default-dormant [upstream-binding] for native; the WASM
+  // smoke-check probes flip them to `active` when transport=wasm.
+  {
+    name: 'chatTemplate',
+    source: 'ruvllm-wasm',
+    probeName: 'chatTemplate',
+    invocationKey: 'formatChat',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Chat template formatting is exposed only via @ruvector/ruvllm-wasm (ChatTemplateWasm). Use transport: \'wasm\' to access.',
+    defaultDormantLift: 'Real llama3 / chatml / mistral / gemma / phi templates for prompt formatting.',
+    defaultDormantEnable: 'await LocalLLM.create({ backend: { kind: \'wasm\' } }), then llm.formatChat(\'llama3\', messages)',
+  },
+  {
+    name: 'chatTemplateDetect',
+    source: 'ruvllm-wasm',
+    probeName: 'chatTemplateDetect',
+    invocationKey: 'detectChatTemplate',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Auto-detect chat template from model id is exposed only via @ruvector/ruvllm-wasm. Use transport: \'wasm\'.',
+    defaultDormantLift: 'Detect template from model name (e.g. \'llama-3-8b\' → \'llama3\') so callers don\'t hardcode.',
+    defaultDormantEnable: 'await LocalLLM.create({ backend: { kind: \'wasm\' } }), then llm.detectChatTemplate(modelId)',
+  },
+  {
+    name: 'hnswRouting',
+    source: 'ruvllm-wasm',
+    probeName: 'hnswRouting',
+    invocationKey: 'createHnswRouter',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'In-process HNSW semantic router is exposed only via @ruvector/ruvllm-wasm (HnswRouterWasm). Use transport: \'wasm\' OR @ruvector/router (NAPI; M17 stealth find).',
+    defaultDormantLift: 'Sub-millisecond pattern routing in-process, browser-compatible.',
+    defaultDormantEnable: 'await LocalLLM.create({ backend: { kind: \'wasm\' } }), then llm.createHnswRouter(384, 1000)',
+  },
 ];
 
 // ---------------- Implementation ----------------
 
 export class LocalLLM implements ValueReportProvider, HealthCheckProvider {
-  private readonly _backend: NativeRuvllmBackend;
+  private readonly _backend: LocalLLMBackend;
   private readonly _options: LocalLLMOptions;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
 
-  private constructor(backend: NativeRuvllmBackend, options: LocalLLMOptions) {
+  private constructor(backend: LocalLLMBackend, options: LocalLLMOptions) {
     this._backend = backend;
     this._options = options;
   }
 
   static async create(options: LocalLLMOptions = {}): Promise<LocalLLM> {
-    const backend = await NativeRuvllmBackend.create({});
+    const transport = resolveLocalLLMTransport(options.backend);
+    let backend: LocalLLMBackend;
+    if (transport === 'native') {
+      backend = await NativeRuvllmBackend.create({});
+    } else if (transport === 'wasm') {
+      backend = await WasmLocalLLMBackend.create({});
+    } else {
+      throw new RuVectorError(
+        'CAPABILITY_DEFERRED',
+        'HTTP transport for LocalLLM is not yet implemented (M17.x deferred). The upstream @ruvector/server@0.1.0 package is broken-published per Issue #08.',
+      );
+    }
     return new LocalLLM(backend, options);
   }
 
-  /** Embedding dimension produced by `embed()`. 768 for the published binding. */
-  get embedDimensions(): number { return this._backend.embedDimensions; }
+  /**
+   * Embedding dimension produced by `embed()`. 768 on the native binding;
+   * `null` on the WASM transport (which does not expose embeddings — Issue #10).
+   * Consumers using cross-archetype DI (e.g. `KnowledgeBase.create({ embedder: llm })`)
+   * should null-check this when running over WASM transport.
+   */
+  get embedDimensions(): number {
+    const dims = this._backend.embedDimensions;
+    if (dims === null) {
+      throw new RuVectorError(
+        'CAPABILITY_DEFERRED',
+        'embedDimensions is not available on the WASM transport — RuvLLMWasm has no embed method (Issue #10). Use transport: \'native\' for cross-archetype embedder DI.',
+      );
+    }
+    return dims;
+  }
 
   /**
    * Embed text(s) into unit-normalized Float32Array vectors.
@@ -366,12 +430,51 @@ export class LocalLLM implements ValueReportProvider, HealthCheckProvider {
     );
   }
 
+  // ----- WASM-only public surface (M17.2) -----
+
+  /**
+   * Format a chat conversation using a named template (llama3 / chatml /
+   * mistral / gemma / phi). WASM-only — throws CAPABILITY_DEFERRED on
+   * native transport. See M17.2 — `ChatTemplateWasm` ships in
+   * `@ruvector/ruvllm-wasm@2.0.0`; the NAPI binding has no equivalent.
+   */
+  async formatChat(template: ChatTemplateName, messages: readonly ChatMessage[]): Promise<string> {
+    this.assertOpen();
+    this.bump('formatChat');
+    return this._backend.formatChat(template, messages);
+  }
+
+  /**
+   * Auto-detect chat template from a model identifier (e.g. `'llama-3-8b'`
+   * → `'llama3'`). WASM-only.
+   */
+  async detectChatTemplate(modelId: string): Promise<ChatTemplateName> {
+    this.assertOpen();
+    this.bump('detectChatTemplate');
+    return this._backend.detectChatTemplate(modelId);
+  }
+
+  /**
+   * Construct an in-process HNSW semantic router. WASM-only — throws
+   * `CAPABILITY_DEFERRED` on native transport. Useful for sub-millisecond
+   * pattern routing in browser environments. Returns a handle with
+   * `addPattern` / `route` / `dimensions` / `patternCount`.
+   */
+  async createHnswRouter(dimensions: number, maxPatterns: number): Promise<HnswRouter> {
+    this.assertOpen();
+    this.bump('createHnswRouter');
+    return this._backend.createHnswRouter(dimensions, maxPatterns);
+  }
+
   // ----- Cross-cutting -----
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const checks = await NativeRuvllmBackend.smokeCheck();
-    this._lastHealth = summarize('LocalLLM', 'native', checks);
+    const transport = this._backend.kind;
+    const checks = transport === 'wasm'
+      ? await WasmLocalLLMBackend.smokeCheck()
+      : await NativeRuvllmBackend.smokeCheck();
+    this._lastHealth = summarize('LocalLLM', transport, checks);
     return this._lastHealth;
   }
 
@@ -414,3 +517,23 @@ export class LocalLLM implements ValueReportProvider, HealthCheckProvider {
 // Re-export type-only references so the module's type surface is self-contained
 // for consumers reading via the umbrella (matches the M5 export pattern).
 export type { CheckResult };
+export type { ChatMessage, ChatTemplateName, HnswRouter, HnswRouteResult } from '../backends/localllm-backend.js';
+
+/**
+ * Resolve the requested transport from `BackendSpec`. Per M17 §6 Q5:
+ * explicit-first, auto-fallback. Defaults: native in Node, wasm in browser.
+ * HTTP requires explicit opt-in.
+ */
+function resolveLocalLLMTransport(spec: BackendSpec | undefined): 'native' | 'wasm' | 'http' {
+  if (spec === undefined || spec === 'auto') {
+    const isNode = typeof process !== 'undefined' && process.versions?.node !== undefined;
+    return isNode ? 'native' : 'wasm';
+  }
+  if (typeof spec === 'string') {
+    if (spec === 'native' || spec === 'wasm' || spec === 'http') return spec;
+    throw new RuVectorError('INVALID_INPUT', `Unknown transport '${spec}'. Expected 'native' | 'wasm' | 'http' | 'auto'.`);
+  }
+  return spec.kind === 'auto'
+    ? (typeof process !== 'undefined' && process.versions?.node !== undefined ? 'native' : 'wasm')
+    : spec.kind;
+}

@@ -21,6 +21,15 @@
 import { createRequire } from 'node:module';
 import { runCheck, type CheckResult } from '../core/health.js';
 import { RuVectorError } from '../core/index.js';
+import type {
+  ChatMessage,
+  ChatTemplateName,
+  HnswRouter,
+  LocalLLMBackend,
+  LocalLLMBackendGenConfig,
+  LocalLLMBackendQueryResponse,
+  LocalLLMBackendRoutingDecision,
+} from './localllm-backend.js';
 
 interface UmbrellaExports {
   RuvLLM: RuvLLMConstructor;
@@ -44,30 +53,10 @@ interface RuvLLMInstance {
   isNativeLoaded?(): boolean;
 }
 
-interface NativeGenConfig {
-  readonly maxTokens?: number;
-  readonly temperature?: number;
-  readonly topP?: number;
-  readonly topK?: number;
-  readonly repetitionPenalty?: number;
-}
-
-export interface NativeQueryResponse {
-  readonly text: string;
-  readonly confidence: number;
-  readonly model: string;
-  readonly contextSize: number;
-  readonly latencyMs: number;
-  readonly requestId: string;
-}
-
-export interface NativeRoutingDecision {
-  readonly model: string;
-  readonly contextSize: number;
-  readonly temperature: number;
-  readonly topP: number;
-  readonly confidence: number;
-}
+// Re-exported type aliases for backward compat with M11.x consumers.
+export type NativeQueryResponse = LocalLLMBackendQueryResponse;
+export type NativeRoutingDecision = LocalLLMBackendRoutingDecision;
+type NativeGenConfig = LocalLLMBackendGenConfig;
 
 export interface NativeRuvllmBackendOptions {
   /**
@@ -78,10 +67,11 @@ export interface NativeRuvllmBackendOptions {
   readonly bindingPath?: never;
 }
 
-export class NativeRuvllmBackend {
+export class NativeRuvllmBackend implements LocalLLMBackend {
   readonly kind = 'native' as const;
   /** Embedding dimension as observed at construction. Currently 768 for the published binding. */
   readonly embedDimensions: number;
+  readonly capabilities: ReadonlySet<string>;
   private readonly _llm: RuvLLMInstance;
   private readonly _umbrella: UmbrellaExports;
 
@@ -89,6 +79,15 @@ export class NativeRuvllmBackend {
     this._umbrella = umbrella;
     this._llm = llm;
     this.embedDimensions = embedDims;
+    // Capabilities the NAPI binding exposes today. The 3 WASM-only ones
+    // (chatTemplate, chatTemplateDetect, hnswRouting) are NOT in this set.
+    this.capabilities = new Set<string>([
+      'embed',
+      'similarity',
+      'generate',
+      'query',
+      'route',
+    ]);
   }
 
   static async create(_options: NativeRuvllmBackendOptions = {}): Promise<NativeRuvllmBackend> {
@@ -192,6 +191,18 @@ export class NativeRuvllmBackend {
 
   hasSimd(): boolean {
     return this._llm.hasSimd?.() ?? false;
+  }
+
+  // ----- WASM-only (native rejects with clear pointer to wasm transport) -----
+
+  async formatChat(_template: ChatTemplateName, _messages: readonly ChatMessage[]): Promise<string> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'formatChat is not available on the native transport (@ruvector/ruvllm@2.5.4 NAPI has no chat-template helper). Use transport: \'wasm\' to access ChatTemplateWasm-backed formatting.');
+  }
+  async detectChatTemplate(_modelId: string): Promise<ChatTemplateName> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'detectChatTemplate is not available on the native transport. Use transport: \'wasm\' to access detectChatTemplate().');
+  }
+  async createHnswRouter(_dimensions: number, _maxPatterns: number): Promise<HnswRouter> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'createHnswRouter is not available on the native transport. Use transport: \'wasm\' to access HnswRouterWasm — or use @ruvector/router@0.1.30 (NAPI; M17 stealth find).');
   }
 
   async close(): Promise<void> {

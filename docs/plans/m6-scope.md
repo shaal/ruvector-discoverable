@@ -194,6 +194,152 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M17.2 outcome (WasmLocalLLMBackend ships; second LocalLLM transport — but with major scope correction)
+
+`packages/sdk/src/backends/wasm-ruvllm.ts` shipped over `@ruvector/ruvllm-wasm@2.0.0`,
+mirroring the M17.1 dispatcher pattern. Shared interface extracted to
+`packages/sdk/src/backends/localllm-backend.ts`. `LocalLLM.create()`
+dispatches per Q5 ratification; auto-fallback defaults to native in Node,
+wasm in browser, http requires explicit opt-in.
+
+**Live findings overturn the M17 scope's "WASM is richer than NAPI" framing
+again — for a deeper reason this time.**
+
+The 45-vs-14 export count was measuring the wrong dimension. WASM's 45
+exports are mostly **compute primitives**: `BufferPoolWasm`,
+`InferenceArenaWasm`, `ParallelInference.attention(q, k, v, …)`,
+`KvCacheConfigWasm`, `MicroLoraWasm`, `SonaInstantWasm` — building blocks
+for someone implementing inference manually. NAPI's 14 are
+**end-user inference**: `embed / similarity / generate / query / route`
+on the `RuvLLM` prototype. **`RuvLLMWasm` has none of these.** The two
+bindings sit at different layers of the stack.
+
+What WASM DOES add over NAPI: 3 working WASM-only capabilities surfaced
+at the LocalLLM archetype level —
+- `chatTemplate` — `ChatTemplateWasm.format(messages)` for llama3 /
+  chatml / mistral / gemma / phi templates. Real chat formatting.
+- `chatTemplateDetect` — `detectChatTemplate(modelId)` auto-resolution.
+- `hnswRouting` — `HnswRouterWasm` with addPattern + route.
+
+Plus 1 broken (intermittent): `RuvLLMWasm.formatChat(template, messages)`
+— throws `"null pointer passed to rust"` in some initialization
+contexts, succeeds in others. The SDK uses `ChatTemplateWasm.format()`
+directly to bypass.
+
+**Issue #10 filed** at `docs/upstream-issues/10-ruvllm-wasm-defects.md`
+documenting the missing inference surface + intermittent formatChat bug.
+Total paste-ready issues: **10 (#01–#10)**.
+
+**Implementation**:
+
+- `LocalLLMBackend` interface (`packages/sdk/src/backends/localllm-backend.ts`)
+  abstracts both transports + 3 WASM-only methods.
+- `NativeRuvllmBackend` refactored to implement the shared interface;
+  `formatChat` / `detectChatTemplate` / `createHnswRouter` throw
+  `CAPABILITY_DEFERRED` with use-transport: 'wasm' pointer.
+- `WasmLocalLLMBackend` wraps `@ruvector/ruvllm-wasm@2.0.0`. WASM init
+  lifecycle hidden inside `create()` (Q4): byte-load via `createRequire +
+  readFileSync` in Node, default fetch in browser. 5 inference methods
+  throw `CAPABILITY_DEFERRED` with use-transport: 'native' pointer + Issue
+  #10 reference. 3 WASM-only methods work end-to-end.
+- One-time `console.warn` at `LocalLLM.create({ kind: 'wasm' })` warns
+  consumers that inference methods aren't supported — sets expectations
+  immediately rather than per-method-error discovery.
+- `embedDimensions` getter throws `CAPABILITY_DEFERRED` on WASM transport
+  (interface declares `number | null`; archetype layer fails fast). This
+  means cross-archetype DI patterns like
+  `KnowledgeBase.create({ dimensions: llm.embedDimensions, embedder: llm })`
+  surface the WASM incompatibility at construct time.
+- 3 new WASM-only catalog rows (`chatTemplate`, `chatTemplateDetect`,
+  `hnswRouting`) default-dormant `[upstream-binding]` for native; smoke-
+  check probes flip them to active under WASM transport (M6.2 self-
+  correcting).
+- New `wasm-localllm-demo` example exercising all 4 flows (smoke-check,
+  template format, HNSW routing, CAPABILITY_DEFERRED on inference).
+
+**Drift-by-inversion verified**: deliberately changed `<|begin_of_text|>`
+→ `<|IMPOSSIBLE_TOKEN|>` in the WASM smoke-check expectation; demo
+correctly reported `✗ chatTemplate broken template output missing llama3
+tokens`. Restored via Edit.
+
+**M8.2 byte-stability**: native local-llm-demo's diff vs M17.2-baseline
+is pure nondeterminism (model output, timestamps, FP variance, gibberish
+samples) — 52 lines of diff, zero structural changes. The native code
+path is byte-identical to pre-M17.2 (`NativeRuvllmBackend.create({})`
+call unchanged).
+
+**Caught live during implementation**:
+
+1. **Initial probe vs smoke-check mismatch on `RuvLLMWasm.formatChat`**:
+   first probe threw "null pointer passed to rust"; the SDK's smoke-check
+   probe later in the same milestone observed `ok` (121-char output).
+   Honest documentation in Issue #10: defect is intermittent, may depend
+   on initialization order; SDK uses `ChatTemplateWasm.format()` directly
+   to bypass either way.
+2. **`InstanceType<typeof ChatTemplateWasm>` rejected by tsc** because
+   the class has `private constructor()` (only static factories). Fixed
+   by importing the class as a *type-only* reference and using it
+   directly: `ChatTemplateWasm` is both a value and a type.
+3. **`embedDimensions: null` was the right interface design** but the
+   archetype's getter coerces it to a `CAPABILITY_DEFERRED` throw. This
+   makes WASM-transport LocalLLM usable as a partial-capability LLM (chat
+   template + routing) while explicitly NOT viable as an embedder DI
+   target. Cross-archetype patterns get clear errors at construct time,
+   not buried per-call failures.
+
+**Cross-archetype DI assertion**: agent-framework-demo (which uses
+LocalLLM as a DI dependency for native transport) intermittently failed
+with `POLICY_VIOLATION` on a `maxDurationMs: 5000` cap (1/3 runs passed,
+2/3 hit ~6000-7000ms). Verified non-regression via `git stash` + re-run on
+d869694 — pre-stash also took >5s in some runs, sample-size-of-1
+historical pass was likely lucky. M17.2 doesn't touch any native LocalLLM
+runtime paths; native code path is byte-identical pre/post. The 5000ms
+cap is environmentally fragile — flagged as a v0.2 work-item to either
+relax the cap or move the demo's perf-sensitive operations off-thread.
+
+**Project-wide value-report breakdown — LocalLLM under both transports**:
+
+| Transport | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| native | 5 | 10 | 3 | 3 | 0 | 4 |
+| wasm   | 3 | 12 | 0 | 9 | 0 | 3 |
+
+(WASM has 9 upstream-bug entries because the 5 inference methods +
+ruvllmFormatChat are all observed broken/unsupported via Issue #10's
+defects — but with the 3 WASM-only capabilities now tracked.)
+
+**v0.2 work-items captured inline**:
+- `agent-framework-demo` 5000ms cap: relax or move perf-sensitive
+  operations off-thread; alternatively bump to 10000ms with a comment
+  explaining the timing variance.
+- `LocalLLM.formatChat` etc. could in v0.3 dispatch through *either*
+  backend if a polyfill becomes available — currently WASM-only.
+- `LocalLLM.createHnswRouter` is WASM-only; v0.3 could add a third
+  transport via `@ruvector/router@0.1.30` (M17 stealth find) for native
+  Node consumers who want HNSW routing without WASM init.
+- HnswRouter lifecycle: WasmHnswRouter holds a wasm-bindgen handle; if
+  the parent LocalLLM closes first the router still works (wasm-bindgen
+  GCs on its own) but uncoordinated. Documented behavior.
+
+**Project state after M17.2**:
+- 6 archetypes shipped
+- 3 of 3 CLI subcommands
+- **2 of 3 transport backends shipped for BOTH GraphReasoner AND LocalLLM**
+  (native + WASM); HTTP deferred per Issue #08
+- 10 paste-ready upstream issues (#01–#10)
+- v0.4 reprobe (31 npm + 1 CLI; published-broken type)
+- v1.0 SDK product narrative complete + transport story 2/3 complete
+  for the two archetypes that have WASM bindings on npm
+
+**Next ship-task candidate**: M18 — investigate `@ruvector/router@0.1.30`
+(M17 stealth find) as a third KB backend independent of `@ruvector/core`'s
+unpublication. Could enable a fully publish-ready KB experience without
+the env-var workaround. Alternatively, M17.3 (HTTP transport) once Issue
+#08 is resolved upstream OR ratification of build-from-Rust-crate path.
+
+`docs/upstream-issues/README.md` references updated to include #10;
+intro range bumped from "M6 → M17.1" to "M6 → M17.2."
+
 ## Update — M17.1 outcome (WasmGraphBackend ships; second graph transport delivered)
 
 `packages/sdk/src/backends/wasm-graph.ts` shipped. Second backend
