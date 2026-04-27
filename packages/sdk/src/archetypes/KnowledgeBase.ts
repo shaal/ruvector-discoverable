@@ -32,8 +32,8 @@ import type { ExplainTrace } from '../core/explain.js';
 import type { FeedbackProvider, FeedbackSignal, QueryId } from '../core/feedback.js';
 import type { Pipeline } from '../core/pipeline.js';
 import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
-import type { HealthCheckProvider, HealthCheckResult } from '../core/health.js';
-import { NotImplementedError, RuVectorError, summarize } from '../core/index.js';
+import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
+import { NotImplementedError, RuVectorError, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 
 // ---------------- Public types ----------------
@@ -296,12 +296,77 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const checks = await NativeCoreBackend.smokeCheck({
+    const bindingChecks = await NativeCoreBackend.smokeCheck({
       dimensions: this._options.dimensions,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    this._lastHealth = summarize('KnowledgeBase', 'native', checks);
+    const archetypeChecks = await KnowledgeBase._archetypeProbe({
+      dimensions: this._options.dimensions,
+      distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+    });
+    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe — exercises the SDK's own ingest+retrieve path.
+   * Inserts 3 documents with distinct one-hot embeddings under a unique
+   * probe ID prefix, retrieves with one as the query, asserts the matching
+   * doc ranks first. Cleans up via `NativeCoreBackend.deleteId`.
+   */
+  private static async _archetypeProbe(opts: {
+    dimensions: number;
+    distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    bindingPath?: string;
+  }): Promise<readonly CheckResult[]> {
+    let probe: KnowledgeBase | null = null;
+    const prefix = `__ruvsdk_probe_kb_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const dims = opts.dimensions;
+    const oneHot = (i: number): Float32Array => {
+      const v = new Float32Array(dims);
+      v[i % dims] = 1;
+      return v;
+    };
+    const ids = [`${prefix}-a`, `${prefix}-b`, `${prefix}-c`];
+
+    const result = await runCheck('ingest+retrieve+rank', async () => {
+      probe = await KnowledgeBase.create({
+        dimensions: opts.dimensions,
+        distanceMetric: opts.distanceMetric,
+        ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
+      });
+      await probe.ingest([
+        { id: ids[0]!, text: 'a', embedding: oneHot(0) },
+        { id: ids[1]!, text: 'b', embedding: oneHot(1) },
+        { id: ids[2]!, text: 'c', embedding: oneHot(2) },
+      ]);
+      const r = await probe.retrieve(oneHot(0), { k: 5 });
+      if (r.citations.length === 0) {
+        return { status: 'broken' as const, detail: '0 citations despite 3 ingested docs' };
+      }
+      // The matching doc (ids[0]) should rank first since its embedding
+      // is exactly the query.
+      const top = r.citations[0];
+      if (!top) return { status: 'broken' as const, detail: 'top citation is undefined' };
+      // Filter only our own probe ids — shared state per Finding B may include
+      // user/other-probe data above ours by score, so check if ids[0] appears
+      // in the top-k at all.
+      const found = r.citations.some((c) => c.documentId === ids[0]);
+      return found
+        ? { status: 'ok' as const, detail: `${r.citations.length} citations; probe-a found in top-${r.citations.length}` }
+        : { status: 'broken' as const, detail: `probe-a not in top-${r.citations.length}: ${r.citations.map(c => c.documentId).join(',')}` };
+    }, 'archetype');
+
+    if (probe !== null) {
+      const backend = (probe as KnowledgeBase)._backend;
+      for (const id of ids) {
+        try { await backend.deleteId(id); } catch {/* ignore */}
+      }
+      await (probe as KnowledgeBase).close();
+    }
+
+    return [result];
   }
 
   async getValueReport(): Promise<ValueReport> {

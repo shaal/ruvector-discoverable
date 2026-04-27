@@ -108,6 +108,10 @@ export class NativeCoreBackend {
     return this._db.len();
   }
 
+  async deleteId(id: string): Promise<boolean> {
+    return this._db.delete(id);
+  }
+
   async isEmpty(): Promise<boolean> {
     return this._db.isEmpty();
   }

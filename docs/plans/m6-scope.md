@@ -194,6 +194,31 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M8.1 outcome (tier-3 archetype probes — closing the readiness loop)
+
+The `ms | 0` bug from M8 v0.1 exposed a gap in the smoke-check pattern: it validated the *binding* but not the SDK's logic over the binding. M8.1 closes that gap with archetype-level probes that exercise the SDK's own public API end-to-end.
+
+`CheckResult` now carries an optional `tier: 'binding' | 'archetype'`. Each archetype's `healthCheck()` runs both: tier-1/2 probes via the existing `NativeBackend.smokeCheck` (catches binding bugs like the Cypher stub), and tier-3 probes via a static `_archetypeProbe()` method (catches SDK-layer bugs like timestamp encoding).
+
+Probes added:
+
+- **GraphReasoner.\_archetypeProbe** — addNodes + addEdges + kHopNeighbors round-trip. Asserts kHop(node-a, 1) reaches node-b. **Leak:** no delete API in `@ruvector/graph-node@2.0.3`; probe data accumulates in shared store. Mitigated by unique IDs.
+- **KnowledgeBase.\_archetypeProbe** — ingest 3 docs with distinct embeddings, retrieve with one as query, assert it ranks in top-k. Cleans up via `NativeCoreBackend.deleteId`.
+- **TimeSeriesMemory.\_archetypeProbe** — append 3 points at year-2100 timestamps, query with window covering them, **assert `top.timestampMs === T0`**. This is literally the regression test for the M8 `ms | 0` bug; if the bug ever returns, this probe surfaces it as `broken` with the diagnostic `expected top.timestampMs=… got 0 — likely an ID encoding bug in the SDK layer`.
+
+`runCheck(name, fn, tier?)` extended to accept tier; default is `'binding'`. No breaking changes to existing call sites.
+
+`NativeCoreBackend.deleteId(id)` exposed for probe cleanup.
+
+Probe latency: TSM probe ~51 ms, KB probe ~45 ms, GR probe ~1 ms (no temp instance — uses GraphReasoner.create directly). All under any reasonable startup budget.
+
+**Three-tier readiness gate now in place:**
+1. **Binding loads** — verified by NAPI/WASM/HTTP load probe.
+2. **Binding works** — verified by tier-1/2 smoke checks (insert, search, etc with known inputs).
+3. **SDK works over binding** — verified by tier-3 archetype probes that go through the SDK's public API and assert on result quality.
+
+Tier 3 is the layer the M8 `ms | 0` bug lived at. Without tier-3 the bug shipped clean through tier-1/2. With tier-3, the bug is now a regression test that runs on every healthCheck.
+
 ## Update — M8 v0.1 outcome (TimeSeriesMemory + third-archetype validation; abstraction-extraction unblocked)
 
 The catalog/probe pattern survived its third archetype with **zero source-level changes**. TimeSeriesMemory uses an identically-shaped `CAPABILITY_CATALOG`, the same `getValueReport` reducer, the same `introspect`. Three meaningfully different workloads (graph / vector / timestamp-keyed) now share the value-report machinery.

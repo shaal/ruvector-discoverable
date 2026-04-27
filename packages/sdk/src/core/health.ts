@@ -23,6 +23,18 @@ export type CheckStatus =
   /** Invocation threw an unexpected error. */
   | 'error';
 
+/**
+ * Which layer the check exercises.
+ *
+ * - `binding` — probes the upstream NAPI/WASM/HTTP binding directly.
+ *   Catches binding bugs (missing methods, broken Cypher engines, etc).
+ * - `archetype` — probes the SDK's own logic over the binding via the
+ *   archetype's public API. Catches SDK-layer bugs (M8's `ms | 0`
+ *   timestamp encoding silently dropped 30 of 30 inserts and would have
+ *   shipped without this tier).
+ */
+export type CheckTier = 'binding' | 'archetype';
+
 export interface CheckResult {
   /** Stable capability ID. */
   readonly name: string;
@@ -30,6 +42,8 @@ export interface CheckResult {
   /** Human-readable diagnostic — surfaced in summaries and reports. */
   readonly detail?: string;
   readonly durationMs: number;
+  /** Layer probed. Default: `'binding'`. */
+  readonly tier?: CheckTier;
 }
 
 export interface HealthCheckResult {
@@ -84,6 +98,7 @@ export function summarize(
 export async function runCheck(
   name: string,
   fn: () => Promise<{ status: CheckStatus; detail?: string }>,
+  tier: CheckTier = 'binding',
 ): Promise<CheckResult> {
   const start = performance.now();
   try {
@@ -93,6 +108,7 @@ export async function runCheck(
       status: result.status,
       ...(result.detail !== undefined && { detail: result.detail }),
       durationMs: performance.now() - start,
+      tier,
     };
   } catch (e) {
     return {
@@ -100,6 +116,7 @@ export async function runCheck(
       status: 'error',
       detail: e instanceof Error ? e.message : String(e),
       durationMs: performance.now() - start,
+      tier,
     };
   }
 }

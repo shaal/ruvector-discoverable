@@ -35,8 +35,8 @@ import type { BackendSpec } from '../core/backend.js';
 import type { ExplainTrace } from '../core/explain.js';
 import type { Pipeline } from '../core/pipeline.js';
 import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
-import type { HealthCheckProvider, HealthCheckResult } from '../core/health.js';
-import { NotImplementedError, RuVectorError, summarize } from '../core/index.js';
+import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
+import { NotImplementedError, RuVectorError, runCheck, summarize } from '../core/index.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
 
 // ---------------- Public types ----------------
@@ -500,9 +500,67 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
    */
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const checks = await NativeGraphBackend.smokeCheck();
-    this._lastHealth = summarize('GraphReasoner', 'native', checks);
+    const bindingChecks = await NativeGraphBackend.smokeCheck();
+    const archetypeChecks = await GraphReasoner._archetypeProbe({
+      dimensions: this._options.dimensions,
+      distanceMetric: this._options.distanceMetric ?? 'Cosine',
+    });
+    this._lastHealth = summarize('GraphReasoner', 'native', [...bindingChecks, ...archetypeChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe — exercises the SDK's own addNodes/addEdges/kHopNeighbors
+   * path. Two nodes connected by one edge; kHop from one with hops=1 must
+   * include the other.
+   *
+   * **Cleanup limitation:** `@ruvector/graph-node@2.0.3` has no delete API
+   * on `GraphDatabase`, so probe data leaks into the shared graph store.
+   * The probe uses unique IDs (`__ruvsdk_probe_gr_<run>_*`) so leaks don't
+   * collide with user data, but the leak is permanent within the process.
+   * Filed as a v0.2 cleanup item.
+   */
+  private static async _archetypeProbe(opts: {
+    dimensions: number;
+    distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+  }): Promise<readonly CheckResult[]> {
+    const prefix = `__ruvsdk_probe_gr_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const idA = `${prefix}-a`;
+    const idB = `${prefix}-b`;
+    const dims = opts.dimensions;
+    const oneHot = (i: number): Float32Array => {
+      const v = new Float32Array(dims);
+      v[i % dims] = 1;
+      return v;
+    };
+
+    const result = await runCheck('addNodes+addEdges+kHop', async () => {
+      const probe = await GraphReasoner.create({
+        dimensions: opts.dimensions,
+        distanceMetric: opts.distanceMetric,
+      });
+      try {
+        await probe.addBatch({
+          nodes: [
+            { id: idA, embedding: oneHot(0), labels: ['Probe'] },
+            { id: idB, embedding: oneHot(1), labels: ['Probe'] },
+          ],
+          edges: [
+            { from: idA, to: idB, description: 'PROBE_LINK', embedding: oneHot(2) },
+          ],
+        });
+        const reachable = await probe.kHopNeighbors({ startNode: idA, hops: 1 });
+        const found = reachable.includes(idB);
+        return found
+          ? { status: 'ok' as const, detail: `kHop(${idA.slice(-8)}, 1) reached ${idB.slice(-8)} (${reachable.length} reachable total)` }
+          : { status: 'broken' as const, detail: `kHop(${idA.slice(-8)}, 1) did not include ${idB.slice(-8)}: ${JSON.stringify(reachable)}` };
+      } finally {
+        // No delete API; close the probe but data leaks (documented).
+        await probe.close().catch(() => {/* ignore */});
+      }
+    }, 'archetype');
+
+    return [result];
   }
 
   async close(): Promise<void> {

@@ -33,8 +33,8 @@
 import type { ExplainTrace } from '../core/explain.js';
 import type { Pipeline } from '../core/pipeline.js';
 import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
-import type { HealthCheckProvider, HealthCheckResult } from '../core/health.js';
-import { NotImplementedError, RuVectorError, summarize } from '../core/index.js';
+import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
+import { NotImplementedError, RuVectorError, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 
 // ---------------- Public types ----------------
@@ -346,12 +346,98 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const checks = await NativeCoreBackend.smokeCheck({
+    const bindingChecks = await NativeCoreBackend.smokeCheck({
       dimensions: this._options.dimensions,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    this._lastHealth = summarize('TimeSeriesMemory', 'native', checks);
+    const archetypeChecks = await TimeSeriesMemory._archetypeProbe({
+      dimensions: this._options.dimensions,
+      distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+    });
+    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 (archetype-level) probe — exercises the SDK's own logic, not
+   * just the binding. Specifically: insert known points with year-2100
+   * timestamps, query with a window covering them, assert the result's
+   * timestampMs roundtrips correctly. **This is the regression test for
+   * the M8 `ms | 0` int32-truncation bug**: if the bug were back,
+   * top.timestampMs would parse as 0 (not the year-2100 value) and the
+   * assertion would fail.
+   *
+   * Uses a unique probe streamId per call so probe data doesn't collide
+   * with user data. Cleans up via `NativeCoreBackend.deleteId` at end —
+   * best-effort, leaks documented as a known cost of Finding B.
+   */
+  private static async _archetypeProbe(opts: {
+    dimensions: number;
+    distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    bindingPath?: string;
+  }): Promise<readonly CheckResult[]> {
+    let probe: TimeSeriesMemory | null = null;
+    let probeIds: string[] = [];
+    const probeStream = `__ruvsdk_probe_tsm_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const T0 = Date.parse('2100-01-01T00:00:00Z'); // far-future, outside any plausible user data
+    const dims = opts.dimensions;
+    const oneHot = (i: number): Float32Array => {
+      const v = new Float32Array(dims);
+      v[i % dims] = 1;
+      return v;
+    };
+
+    const result = await runCheck('append+query+windowFilter', async () => {
+      probe = await TimeSeriesMemory.create({
+        streamId: probeStream,
+        dimensions: opts.dimensions,
+        distanceMetric: opts.distanceMetric,
+        ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
+      });
+      // Three points across 2 minutes in 2100. Distinct embeddings.
+      await probe.append({ timestampMs: T0,           value: oneHot(0) });
+      await probe.append({ timestampMs: T0 + 60_000,  value: oneHot(1) });
+      await probe.append({ timestampMs: T0 + 120_000, value: oneHot(2) });
+      probeIds = [
+        `ts:${probeStream}:${String(T0          ).padStart(15, '0')}:0`,
+        `ts:${probeStream}:${String(T0 + 60_000 ).padStart(15, '0')}:1`,
+        `ts:${probeStream}:${String(T0 + 120_000).padStart(15, '0')}:2`,
+      ];
+
+      // Query with a window covering all three. Top must match oneHot(0).
+      const r = await probe.query(oneHot(0), {
+        window: { fromMs: T0 - 1, toMs: T0 + 200_000 },
+        k: 16,
+      });
+      if (r.points.length === 0) {
+        return { status: 'broken' as const, detail: '0 points returned despite 3 in-window inserts (M8 ms|0 regression suspected)' };
+      }
+      const top = r.points[0];
+      if (!top) return { status: 'broken' as const, detail: 'top result is undefined' };
+      if (top.timestampMs !== T0) {
+        return {
+          status: 'broken' as const,
+          detail: `expected top.timestampMs=${T0} (year 2100), got ${top.timestampMs} — likely an ID encoding bug in the SDK layer`,
+        };
+      }
+      return {
+        status: 'ok' as const,
+        detail: `${r.points.length} points in-window; top.timestampMs roundtrips correctly`,
+      };
+    }, 'archetype');
+
+    // Cleanup — best-effort. Probe data leaks into shared backend per Finding B,
+    // but unique probeStream means it never appears in user queries.
+    if (probe !== null) {
+      const backend = (probe as TimeSeriesMemory)._backend;
+      for (const id of probeIds) {
+        try { await backend.deleteId(id); } catch {/* ignore */}
+      }
+      await (probe as TimeSeriesMemory).close();
+    }
+
+    return [result];
   }
 
   async getValueReport(): Promise<ValueReport> {
