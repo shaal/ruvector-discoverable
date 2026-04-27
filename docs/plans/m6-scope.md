@@ -194,6 +194,28 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M12.2 deferral (CLI shares NAPI's model-loading defect; my M11/M12 claim about ruvllm CLI was wrong)
+
+Live re-probing of `node_modules/.bin/ruvllm --help` and `node_modules/@ruvector/ruvllm/bin/cli.js` overturns the claims that grounded M12.2 (Phase 2B CLI subprocess transport). **Both M11 scoping and M12 scoping cited a `--model` flag and a `serve` subcommand that do not exist in the actually-installed `@ruvector/ruvllm@2.5.4` CLI.** The CLI source constructs `new RuvLLM()` (line 229) or `new RuvLLM({ embeddingDim: 768, learningEnabled: false })` (line 877) with no model path; it shares the same broken-default-model defect as the in-process NAPI path probed in M12.1.
+
+Live evidence: `ruvllm generate "Once upon a time" --max-tokens 10` produces `XboutuponthenronDbout##erin|inPup0|D0...` — same letter-noise as `LocalLLM.generate(...)` over NAPI. The CLI's own emitted warning ("Built-in SIMD inference is experimental. For production use, configure an external LLM provider") is the closest upstream comes to acknowledging this — but the warning is non-specific about scope; it applies to NAPI too.
+
+**M12.2 is deferred indefinitely.** Shipping a `CliRuvllmBackend` would proxy `generate`/`query`/`route` to a subprocess that produces the same gibberish — extra subprocess overhead, zero quality benefit. The M12 scoping doc is updated with a CORRECTION callout under §3.2 Transport 2 and a DEFERRED status under §4 Phase 2B. The original (incorrect) analysis is preserved in the doc as historical record of what assumptions broke and why.
+
+**M11.3 lesson generalizes — re-probe should cover CLI surface contracts, not just npm publication status.** The current `tools/reprobe-bindings/reprobe.mjs` confirms a package is *published*; it doesn't confirm the package's *advertised features* are real. The same kind of drift that hit "ruvllm has no NAPI binding" (M11) hit "ruvllm CLI accepts `--model`" (M12.2). A v2 reprobe could spawn `<bin> --help` for each tracked CLI binary and grep for advertised flags / subcommands — small extension. Logged as M11.3 v0.2 work-item.
+
+**Issue #05 updated** at `docs/upstream-issues/05-no-model-loading-api.md` with a "Second affected transport: the bundled CLI" section. Shows both transports manifest the same root cause; gives upstream a single fix that unblocks both. The CLI source line references (`bin/cli.js:229,877`) are included so an upstream maintainer can verify the lack of model-loading in seconds.
+
+**Three lessons compounding across M11/M12**:
+
+1. M11 scoping: trust live probes over earlier docs. ✓ Codified as M11.3 (`reprobe.mjs`).
+2. M12 scoping: trust live binding-internals (TypeScript declarations) over advertised behavior. ✓ Codified by reading `node_modules/@ruvector/ruvllm/dist/cjs/native.js` source map directly in M12.1.
+3. M12.2 deferral: trust live CLI-help output over advertised CLI surface. **Not yet codified in tooling.** Worth adding as `reprobe.mjs` v0.2 — extend the script to optionally probe `<bin> --help` and check for advertised flag presence.
+
+**Project state unchanged from M12.1**: 17 active capabilities, 24 dormant (14 upstream-binding, 4 upstream-bug, 3 sdk-integration, 3 design-deferred). The ratified Phase 2 → Phase 2A-only path means LocalLLM's row stays at 3 active / 9 dormant; the only difference from M12.1 is that M12.2 is now off the roadmap (vs deferred-but-planned).
+
+**Next-task options for the user to ratify**: (1) Issue #06 standalone (the QueryResponse/RoutingDecision under-populated-struct defect; reproducer already in #05's "Related findings"; ~scoping-doc-sized); (2) AgentMemory archetype scoping (deferred since M11; the SDK has 4 working archetypes and 2 placeholder M5-typed-only archetypes still); (3) `reprobe.mjs` v0.2 — add CLI-help probing per the M12.2 lesson; (4) other.
+
 ## Update — M12.1 outcome (LocalLLM Phase 2A — generate/query/route honest over NAPI)
 
 `LocalLLM.generate` / `query` / `route` now wired through `NativeRuvllmBackend`. M5 surface preserved: `generate` returns `GenerateResult` (binding's plain-string output wrapped with character-heuristic tokenIn/tokenOut and an explain trace); `query` returns `QueryResult`; `route` returns `RoutingDecision` (both new types, exported from `@ruvector/sdk`). `streaming` remains design-deferred (upstream `StreamingGenerator` chunks the full response — not real token-by-token).

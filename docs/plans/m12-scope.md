@@ -177,18 +177,26 @@ Cons:
 
 ### Transport 2 — CLI subprocess
 
-Status: **published, documented, accepts `--model`. The only path that actually loads a model today.**
+> **CORRECTION — 2026-04-27 (M12.2 live re-probe).** The two claims this section was built on — "documented `--model` flag" and "`ruvllm serve` is an HTTP server" — are **both false in the actually-installed binary**. Probing `node_modules/.bin/ruvllm --help` shows neither a `--model` option nor a `serve` subcommand. The CLI source at `node_modules/@ruvector/ruvllm/bin/cli.js:229,877` constructs `new RuvLLM()` (or `new RuvLLM({ embeddingDim: 768, learningEnabled: false })`) with **no model path** — it shares the same broken-default-model defect as the in-process NAPI surface (Phase 2A / Issue #05). Live evidence: `ruvllm generate "Once upon a time" --max-tokens 10` produces `XboutuponthenronDbout##erin|inPup0|D0...` — same letter-noise as the NAPI path.
+>
+> Same lesson the M11.3 re-probe tool was built for: trust live probes, not earlier scoping prose. M11 scoping cited the `--model` / `serve` claims from upstream docs; I propagated them into M12 scoping without re-probing the actually-installed CLI. M11.3 catches *npm publication status* drift; the lesson now generalizes — **CLI surface contracts** also need live re-probing before they enter scoping. The `Transport 2` block below is preserved as the *original* analysis to keep this scoping doc honest about what was wrong; the corrected verdict is at the bottom of the section.
+>
+> The user-facing consequence: **Phase 2B implementation is deferred** until upstream exposes a model-loading API in any transport. There is no CLI quality differentiator over NAPI to ship.
 
-Pros:
+Status (original — incorrect): **published, documented, accepts `--model`. The only path that actually loads a model today.**
+
+Pros (original — claims that turn out to be false):
 - Real GGUF loading via the documented CLI flag.
 - `ruvllm serve` is an HTTP server — same interface the SDK's eventual `http` backend will need.
 - Decoupled lifecycle: SDK can crash without taking model down; vice versa.
 
-Cons:
+Cons (original):
 - Subprocess management overhead (start, monitor, restart, parse stdout).
 - IPC + process-spawn latency on every call.
 - Streaming requires parsing CLI's stdout format or hitting `serve`'s SSE endpoint.
 - `@ruvector/ruvllm-cli@0.1.1` — version 0.1 means contract may change; pin defensively.
+
+**Corrected verdict (M12.2):** the CLI offers **no quality benefit over NAPI today**. Subprocess isolation alone (decoupled lifecycle, eventual basis for HTTP backend) is the only remaining argument for the transport, and that's not load-bearing for v0.1. Defer Phase 2B until upstream ships model loading; revisit then.
 
 ### Transport 3 — WASM
 
@@ -220,7 +228,11 @@ The key shape decision: `LocalLLM.generate(prompt, opts) → GenerateResult` wra
 
 Effort: ~half-session (small wrapping; tier-3 probes lifted from M11.1's pattern).
 
-### Phase 2B — CLI subprocess transport (`backend: 'cli'`)
+### Phase 2B — CLI subprocess transport (`backend: 'cli'`) — **DEFERRED (M12.2)**
+
+> **Status: deferred indefinitely.** The premise this section was written under (CLI accepts `--model`; `serve` subcommand exists; CLI loads custom GGUFs) is contradicted by live re-probing of the actually-installed `@ruvector/ruvllm@2.5.4` CLI binary. See the "CORRECTION" callout under §3.2 Transport 2 above. The CLI shares the same broken-default-model defect as NAPI; shipping a CLI subprocess transport delivers no quality benefit today.
+>
+> The original plan is preserved below as historical record of what was *intended* and what assumptions broke. Implementation is gated on upstream exposing a model-loading API in any transport.
 
 Add `CliRuvllmBackend` alongside `NativeRuvllmBackend`. Constructor signature:
 
@@ -232,22 +244,22 @@ LocalLLM.create({
 })
 ```
 
-Behavior:
+Behavior (intended, not viable today):
 1. Resolve `model`: if alias, look up in `MODEL_ALIASES` then `RUVLTRA_MODELS`; if path, use directly.
 2. If alias and not yet downloaded, call `ModelDownloader.download(alias)` (with progress callback).
-3. Lazy-spawn `ruvllm serve --model <path> --port <random>` on first generate, hold the child process for the LocalLLM instance lifetime, kill on `close()`.
-4. `generate(prompt, opts)` POSTs to the local serve port, parses JSON response.
-5. `stream` proxies the serve endpoint's SSE if present; otherwise falls back to `await generate()` + chunk.
+3. Lazy-spawn `ruvllm serve --model <path> --port <random>` on first generate. **Wrong**: there is no `serve` subcommand; there is no `--model` flag.
+4. `generate(prompt, opts)` POSTs to the local serve port, parses JSON response. **Wrong** for the same reason.
+5. `stream` proxies the serve endpoint's SSE if present; otherwise falls back to `await generate()` + chunk. **Wrong** — no SSE endpoint exists.
 
-Tier-3 probes (run only when CLI backend is wired):
-- `cli-binary-resolves` — `which ruvllm` (or `npm root -g | xargs -I% ls %/.bin/ruvllm`) succeeds.
-- `cli-generate-non-gibberish` — same ≥80% alphanum assertion against subprocess stdout, gated on a known model being available. If the test environment has no model file, probe returns `unsupported` (not `broken`).
+Tier-3 probes (planned but not built):
+- `cli-binary-resolves` — `which ruvllm` (or `npm root -g | xargs -I% ls %/.bin/ruvllm`) succeeds. *Would pass today; the binary is symlinked at `node_modules/.bin/ruvllm`.*
+- `cli-generate-non-gibberish` — same ≥80% alphanum assertion against subprocess stdout, gated on a known model being available. *Would always report `broken` today regardless of model file because the CLI ignores the model and uses the same default-NAPI weights.*
 
-Effort: ~full session. Subprocess management is the new piece (lifecycle, stderr capture, health checks). Doable; has a clear template (`child_process.spawn`).
+Effort: deferred. Cost-vs-value flipped to ~0 once the CLI's lack-of-model-loading was probed. Revisit when upstream ships any model-loading mechanism.
 
 ### Phase 2C — WASM backend (deferred)
 
-Adds `WasmRuvllmBackend` for browser use. Out of scope for v0.1 LocalLLM; recommended as the v0.2 follow-up after Phase 2B ships and patterns settle.
+Adds `WasmRuvllmBackend` for browser use. Out of scope for v0.1 LocalLLM. Worth re-probing live (per the M11.3+M12.2 lesson) before relying on M11 scoping's claim that `RuvLLMWasm` accepts model bytes — that claim is now suspect by association.
 
 ---
 
