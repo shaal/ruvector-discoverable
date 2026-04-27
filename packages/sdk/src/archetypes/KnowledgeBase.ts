@@ -37,7 +37,9 @@ import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { resolveEmbedding, requireEmbedderForString, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import { RouterKbBackend } from '../backends/router-kb.js';
 import { NativeSonaBackend } from '../backends/native-sona.js';
+import type { KbBackend } from '../backends/kb-backend.js';
 import { GraphReasoner } from './GraphReasoner.js';
 import type { LocalLLM } from './LocalLLM.js';
 
@@ -52,10 +54,29 @@ export interface KnowledgeBaseOptions {
   readonly storage?: string;
   /**
    * Path to the upstream @ruvector/core binary. Falls back to the
-   * RUVECTOR_CORE_BINDING env var. Required because @ruvector/core is not
-   * yet published on npm — see backends/native-core.ts.
+   * RUVECTOR_CORE_BINDING env var. Required when `nativePackage: 'core'`
+   * (the default) because @ruvector/core is not yet published on npm.
+   * Ignored when `nativePackage: 'router'`.
    */
   readonly bindingPath?: string;
+  /**
+   * **M18 — choose the NAPI package backing this KB.**
+   *
+   *   - `'core'` (default) wraps `@ruvector/core` — the upstream-planned
+   *     primary. **Not yet published on npm**, so consumers must supply
+   *     `bindingPath` or set `RUVECTOR_CORE_BINDING`.
+   *   - `'router'` wraps `@ruvector/router@0.1.30+` — a stealth-published
+   *     NAPI binding with a working VectorDb. **Publish-ready today**:
+   *     `npm install @ruvector/sdk @ruvector/router` Just Works without
+   *     the env-var workaround. Capability gap vs core: no batchInsert /
+   *     health / metrics surface, but KB doesn't use those today.
+   *
+   * The SDK's reprobe (`tools/reprobe-bindings/reprobe.mjs`) tracks
+   * `@ruvector/core` publication; when it lands, `'core'` becomes the
+   * preferred default. M18 keeps `'core'` as the explicit default to
+   * avoid silent behavior change on existing call sites.
+   */
+  readonly nativePackage?: 'core' | 'router';
   /** Override capability defaults. Most users should leave defaults alone. */
   readonly capabilities?: KnowledgeBaseCapabilityConfig;
   /**
@@ -368,7 +389,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
 // ---------------- Implementation ----------------
 
 export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, HealthCheckProvider {
-  private readonly _backend: NativeCoreBackend;
+  private readonly _backend: KbBackend;
   private readonly _options: KnowledgeBaseOptions;
   private readonly _graph: GraphReasoner | null;
   private readonly _sona: NativeSonaBackend | null;
@@ -385,7 +406,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   // trajectory the retrieve() call opened.
   private _trajectoryByQuery = new Map<string, number>();
 
-  private constructor(backend: NativeCoreBackend, options: KnowledgeBaseOptions, sona: NativeSonaBackend | null) {
+  private constructor(backend: KbBackend, options: KnowledgeBaseOptions, sona: NativeSonaBackend | null) {
     this._backend = backend;
     this._options = options;
     this._graph = options.graphReasoner ?? null;
@@ -396,12 +417,22 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
 
   static async create(options: KnowledgeBaseOptions): Promise<KnowledgeBase> {
     validateEmbedderDimensions(options.embedder, options.dimensions, 'KnowledgeBase');
-    const backend = await NativeCoreBackend.create({
-      dimensions: options.dimensions,
-      distanceMetric: options.distanceMetric ?? 'Cosine',
-      ...(options.storage !== undefined && { storage: options.storage }),
-      ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
-    });
+    const nativePackage = options.nativePackage ?? 'core';
+    let backend: KbBackend;
+    if (nativePackage === 'router') {
+      backend = await RouterKbBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+      });
+    } else {
+      backend = await NativeCoreBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+        ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
+      });
+    }
     let sona: NativeSonaBackend | null = null;
     if (options.sona !== undefined) {
       const sonaCfg = options.sona === true ? {} : options.sona;
@@ -627,13 +658,17 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const bindingChecks = await NativeCoreBackend.smokeCheck({
-      dimensions: this._options.dimensions,
-      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
-    });
+    const nativePackage = this._backend.nativePackage ?? 'core';
+    const bindingChecks = nativePackage === 'router'
+      ? await RouterKbBackend.smokeCheck({ dimensions: this._options.dimensions })
+      : await NativeCoreBackend.smokeCheck({
+          dimensions: this._options.dimensions,
+          ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        });
     const archetypeChecks = await KnowledgeBase._archetypeProbe({
       dimensions: this._options.dimensions,
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      nativePackage,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
     // M9: graph-rag probe (when user supplied a graphReasoner).
@@ -842,6 +877,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   private static async _archetypeProbe(opts: {
     dimensions: number;
     distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    nativePackage?: 'core' | 'router';
     bindingPath?: string;
   }): Promise<readonly CheckResult[]> {
     let probe: KnowledgeBase | null = null;
@@ -858,6 +894,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
       probe = await KnowledgeBase.create({
         dimensions: opts.dimensions,
         distanceMetric: opts.distanceMetric,
+        ...(opts.nativePackage !== undefined && { nativePackage: opts.nativePackage }),
         ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
       });
       await probe.ingest([

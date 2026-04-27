@@ -194,6 +194,129 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M18 outcome (Router-backed KnowledgeBase ships; eliminates RUVECTOR_CORE_BINDING env-var requirement)
+
+**The biggest single UX win since M16's README.** `KnowledgeBase.create({
+nativePackage: 'router' })` runs without `RUVECTOR_CORE_BINDING` set — the
+env-var workaround that has burdened KB consumers since M7 v0.1 is now
+optional. `npm install @ruvector/sdk @ruvector/router` Just Works.
+
+`packages/sdk/src/backends/router-kb.ts` shipped. Wraps
+`@ruvector/router@0.1.30` (M17 stealth find: published, working VectorDb
+with insert/insertAsync/search/searchAsync/count/getAllIds/delete on the
+NAPI layer — same architectural layer as `@ruvector/core` but a separate
+package that's actually on npm).
+
+**Implementation**:
+
+- New shared interface at `packages/sdk/src/backends/kb-backend.ts`
+  abstracting NativeCoreBackend and RouterKbBackend under a common
+  `KbBackend` type with a `nativePackage: 'core' | 'router' | null`
+  discriminator.
+- `NativeCoreBackend` refactored to implement the shared interface
+  (`nativePackage: 'core'`); existing behavior preserved.
+- `RouterKbBackend` (`packages/sdk/src/backends/router-kb.ts`) wraps
+  `@ruvector/router@0.1.30`. Handles ESM-of-CJS interop for the
+  `DistanceMetric` enum (only on `m.default`, not the top-level
+  namespace). Capability set excludes `vectorDelete` (Issue #11) but
+  includes vectorInsert/vectorSearch/collectionStats.
+- `KnowledgeBase.create()` dispatcher: `nativePackage: 'core'` (default,
+  backward-compatible) vs `'router'` (new, publish-ready). Default kept
+  at `'core'` to avoid silent behavior change on existing call sites.
+- `KnowledgeBase.healthCheck()` dispatches per backend.
+- `_archetypeProbe` propagates `nativePackage` so probe-internal
+  KnowledgeBase.create calls match the user's choice.
+- New `knowledge-base-router-demo` example runs without any env var:
+  `unset RUVECTOR_CORE_BINDING && node examples/knowledge-base-router-demo/run.mjs`
+  → exit 0, 5 docs ingested, top-3 retrieve correctly ranked.
+
+**Caught live (substantial defects discovered during M18)**:
+
+1. **Issue #11 — `@ruvector/router@0.1.30.VectorDb.delete()` deadlocks
+   forever** on existing IDs. Native-side infinite loop: even
+   `setTimeout` doesn't fire. `delete()` works only on empty DBs or for
+   non-existent IDs. Filed at
+   `docs/upstream-issues/11-router-delete-deadlock.md` with reproducer.
+   The SDK's `RouterKbBackend.deleteId` throws `CAPABILITY_DEFERRED`
+   rather than passing through — protects the SDK process from hanging.
+   `vectorDelete` smoke-check probe is intentionally declared
+   `unsupported` (not run live) for the same reason.
+
+2. **ESM-of-CJS interop quirk** — Node's dynamic `import('@ruvector/router')`
+   hoists the `VectorDb` class to the namespace top level (because it's
+   a function/class) but leaves `DistanceMetric` (a plain object) only on
+   the `default` export. Cost an hour of confused debugging. Fix: a
+   `loadRouterModule()` helper that merges `m.default` and `m`.
+
+3. **Router does NOT share `@ruvector/core`'s Issue #03 dimension-
+   singleton** — two VectorDbs with different dimensions (16 + 768)
+   coexist cleanly in the same process, both inserts succeed. Net: router
+   has its own delete deadlock but better multi-instance isolation than
+   core. **Router-backed KB is genuinely more robust for cross-archetype
+   DI scenarios** where multiple archetypes might use different
+   dimensions concurrently.
+
+**Surface coverage vs `@ruvector/core`**:
+
+| Capability | core | router |
+|---|---|---|
+| insert / insertAsync | ✓ | ✓ |
+| insertBatch | ✓ | ✗ (synthesized as per-call loop) |
+| search / searchAsync | ✓ | ✓ |
+| count / len | ✓ | ✓ |
+| delete | ✓ | ✗ Issue #11 (CAPABILITY_DEFERRED) |
+| health / metrics / version | ✓ | ✗ (returns null) |
+| Multi-instance isolation | ✗ Issue #03 | ✓ |
+| Published on npm | ✗ (env-var workaround) | ✓ |
+
+The user picks based on workload: append-only RAG → router (publish-
+ready, no env var, append-only is fine); mutable KBs that need delete →
+core (until upstream publishes / fixes Issue #11).
+
+**Drift-by-inversion verified**: temporarily changed `delta === 1` to
+`delta === 999` in vectorInsert smoke-check expectation; demo correctly
+reported `✗ vectorInsert broken expected delta=1 got 1`. Restored cleanly.
+
+**M8.2 byte-stability**: native KB demo failure mode is byte-identical
+to baseline — both hit Issue #03 with `Dimension mismatch: expected 768,
+got 16`. NOT a regression; pre-existing. The router demo is a new
+artifact (no pre-existing baseline to diff against).
+
+**`reprobe.mjs` v0.4 unchanged this milestone** — `@ruvector/router`
+already tracked. Issue #11 is a *runtime* defect, not a publication-
+status drift; surface-contract probes for the deadlock-detection are a
+v0.5 work-item (require careful design — running a deadlock test via
+reprobe would hang reprobe itself).
+
+**Total paste-ready upstream issues now: 11 (#01–#11).**
+
+**Project state after M18**:
+- 6 archetypes shipped
+- 3 of 3 CLI subcommands
+- **2 of 3 transport backends shipped for GraphReasoner AND LocalLLM**
+  (native + WASM); HTTP deferred per Issue #08
+- **3 NAPI-layer backends for KnowledgeBase**: native-core (with env
+  var), native-router (publish-ready, append-only), with the router
+  path being recommended for new consumers.
+- 11 paste-ready upstream issues (#01–#11)
+- v0.4 reprobe (31 npm + 1 CLI; published-broken type)
+- KB no longer needs `RUVECTOR_CORE_BINDING` for read-mostly workloads —
+  the largest UX friction in v0.1 lifted.
+
+**Next ship-task candidates**:
+- **M19**: extend `nativePackage: 'router'` to TimeSeriesMemory and
+  AgentMemory (which also use NativeCoreBackend today). Same dispatcher
+  pattern; need to scope which TSM/AgentMemory operations the router
+  surface supports (timestamp-keyed inserts, agent-scoping — likely
+  needs adapter-side translation).
+- **M17.3**: HTTP transport — blocked on Issue #08 republish.
+- **v0.5 reprobe**: surface-contract probes for the binding-method
+  defects (Issue #11 deadlock detection without hanging reprobe; M17.1
+  cypher-stub status; etc).
+
+`docs/upstream-issues/README.md` references updated to include #11;
+intro range bumped from "M6 → M17.2" to "M6 → M18."
+
 ## Update — M17.2 outcome (WasmLocalLLMBackend ships; second LocalLLM transport — but with major scope correction)
 
 `packages/sdk/src/backends/wasm-ruvllm.ts` shipped over `@ruvector/ruvllm-wasm@2.0.0`,

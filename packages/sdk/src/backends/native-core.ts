@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { runCheck, type CheckResult } from '../core/health.js';
 import { RuVectorError } from '../core/index.js';
+import type { KbBackend, KbHealthReport, KbSearchResult, KbVectorEntry } from './kb-backend.js';
 
 // Shape of the upstream binding's exports — kept here as a private type because
 // no published d.ts exists for the in-repo binary.
@@ -56,8 +57,9 @@ export interface NativeCoreBackendOptions {
   readonly bindingPath?: string;
 }
 
-export class NativeCoreBackend {
+export class NativeCoreBackend implements KbBackend {
   readonly kind = 'native' as const;
+  readonly nativePackage = 'core' as const;
   readonly capabilities: ReadonlySet<string>;
   private readonly _db: CoreVectorDb;
   private readonly _binding: CoreBinding;
@@ -94,13 +96,13 @@ export class NativeCoreBackend {
     return this._db.insert({ id, vector });
   }
 
-  async insertBatch(entries: readonly { id: string; vector: Float32Array }[]): Promise<readonly string[]> {
+  async insertBatch(entries: readonly KbVectorEntry[]): Promise<readonly string[]> {
     return this._db.insertBatch(entries);
   }
 
   // ----- Reads -----
 
-  async search(vector: Float32Array, k: number): Promise<readonly { id: string; score: number }[]> {
+  async search(vector: Float32Array, k: number): Promise<readonly KbSearchResult[]> {
     return this._db.search({ vector, k });
   }
 
@@ -116,7 +118,7 @@ export class NativeCoreBackend {
     return this._db.isEmpty();
   }
 
-  health(): { status: string; version: string; uptimeSeconds: number } {
+  health(): KbHealthReport {
     return this._binding.getHealth();
   }
 

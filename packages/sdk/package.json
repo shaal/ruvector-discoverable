@@ -39,6 +39,7 @@
   "dependencies": {
     "@ruvector/graph-node": "^2.0.3",
     "@ruvector/graph-wasm": "^2.0.2",
+    "@ruvector/router": "^0.1.30",
     "@ruvector/ruvllm": "^2.5.4",
     "@ruvector/ruvllm-darwin-arm64": "^2.0.1",
     "@ruvector/ruvllm-wasm": "^2.0.0",

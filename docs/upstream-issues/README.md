@@ -1,6 +1,6 @@
 # Upstream issue reports
 
-These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI/WASM bindings (M6 → M17.2 in `m6-scope.md`).
+These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI/WASM bindings (M6 → M18 in `m6-scope.md`).
 
 The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smoke-check `[observed via probe]` strings) is the evidence in each report — that infrastructure was built precisely so that observations would convert directly into reproducible upstream issues.
 
@@ -25,6 +25,7 @@ The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smo
 | [`08-server-cluster-broken-publish.md`](08-server-cluster-broken-publish.md) | Publishing pipeline | `@ruvector/server@0.1.0`, `@ruvector/cluster@0.1.0` |
 | [`09-graph-wasm-defects.md`](09-graph-wasm-defects.md) | Multiple bugs + missing API | `@ruvector/graph-wasm@2.0.2` |
 | [`10-ruvllm-wasm-defects.md`](10-ruvllm-wasm-defects.md) | Missing inference surface + broken formatChat | `@ruvector/ruvllm-wasm@2.0.0` |
+| [`11-router-delete-deadlock.md`](11-router-delete-deadlock.md) | `delete(id)` hangs SDK process forever | `@ruvector/router@0.1.30` |
 
 ## How the SDK found these
 
