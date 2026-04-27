@@ -38,6 +38,8 @@ import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import { RouterKbBackend } from '../backends/router-kb.js';
+import type { KbBackend } from '../backends/kb-backend.js';
 import type { LocalLLM } from './LocalLLM.js';
 
 // ---------------- Public types ----------------
@@ -53,9 +55,22 @@ export interface TimeSeriesMemoryOptions {
   readonly storage?: string;
   /**
    * Path to upstream @ruvector/core binary. Falls back to RUVECTOR_CORE_BINDING.
-   * Required because @ruvector/core is not yet published on npm.
+   * Required when `nativePackage: 'core'` (the default) because
+   * @ruvector/core is not yet published on npm. Ignored when
+   * `nativePackage: 'router'`.
    */
   readonly bindingPath?: string;
+  /**
+   * **M19 — choose the NAPI package backing this TSM.**
+   *
+   * Same dispatcher as M18's KnowledgeBase: `'core'` (default) wraps
+   * `@ruvector/core` (env-var workaround needed); `'router'` wraps
+   * `@ruvector/router@0.1.30+` (publish-ready, no env var). For TSM,
+   * the router path is fully usable — TSM uses insert/search/len which
+   * the router supports cleanly. Issue #11 (router's `delete()` deadlock)
+   * doesn't affect TSM because TSM is naturally append-only.
+   */
+  readonly nativePackage?: 'core' | 'router';
   /** Granularity hint for temporal compression. Currently advisory only. */
   readonly bucketMs?: number;
   /**
@@ -274,7 +289,7 @@ interface RingPoint {
 }
 
 export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvider {
-  private readonly _backend: NativeCoreBackend;
+  private readonly _backend: KbBackend;
   private readonly _options: TimeSeriesMemoryOptions;
   private readonly _embedder: LocalLLM | null;
   private _invocationCounts = new Map<string, number>();
@@ -288,7 +303,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   private readonly _maxRecent: number;
   private readonly _cpWindow: number;
 
-  private constructor(backend: NativeCoreBackend, options: TimeSeriesMemoryOptions) {
+  private constructor(backend: KbBackend, options: TimeSeriesMemoryOptions) {
     this._backend = backend;
     this._options = options;
     this._embedder = options.embedder ?? null;
@@ -306,12 +321,22 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
 
   static async create(options: TimeSeriesMemoryOptions): Promise<TimeSeriesMemory> {
     validateEmbedderDimensions(options.embedder, options.dimensions, 'TimeSeriesMemory');
-    const backend = await NativeCoreBackend.create({
-      dimensions: options.dimensions,
-      distanceMetric: options.distanceMetric ?? 'Cosine',
-      ...(options.storage !== undefined && { storage: options.storage }),
-      ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
-    });
+    const nativePackage = options.nativePackage ?? 'core';
+    let backend: KbBackend;
+    if (nativePackage === 'router') {
+      backend = await RouterKbBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+      });
+    } else {
+      backend = await NativeCoreBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+        ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
+      });
+    }
     return new TimeSeriesMemory(backend, options);
   }
 
@@ -494,18 +519,23 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const bindingChecks = await NativeCoreBackend.smokeCheck({
-      dimensions: this._options.dimensions,
-      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
-    });
+    const nativePackage = this._backend.nativePackage ?? 'core';
+    const bindingChecks = nativePackage === 'router'
+      ? await RouterKbBackend.smokeCheck({ dimensions: this._options.dimensions })
+      : await NativeCoreBackend.smokeCheck({
+          dimensions: this._options.dimensions,
+          ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        });
     const archetypeChecks = await TimeSeriesMemory._archetypeProbe({
       dimensions: this._options.dimensions,
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      nativePackage,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
     const cpChecks = await TimeSeriesMemory._changepointProbe({
       dimensions: this._options.dimensions,
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      nativePackage,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
     // M11.2: auto-embed probe (only runs when the user supplied an embedder).
@@ -518,7 +548,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
           durationMs: 0,
           tier: 'archetype' as const,
         }];
-    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks, ...cpChecks, ...autoEmbedChecks]);
+    this._lastHealth = summarize('TimeSeriesMemory', this._backend.kind, [...bindingChecks, ...archetypeChecks, ...cpChecks, ...autoEmbedChecks]);
     return this._lastHealth;
   }
 
@@ -538,6 +568,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
         streamId: probeStream,
         dimensions: this._options.dimensions,
         distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.nativePackage !== undefined && { nativePackage: this._options.nativePackage }),
         ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
         embedder: this._embedder!,
       });
@@ -592,6 +623,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   private static async _archetypeProbe(opts: {
     dimensions: number;
     distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    nativePackage?: 'core' | 'router';
     bindingPath?: string;
   }): Promise<readonly CheckResult[]> {
     let probe: TimeSeriesMemory | null = null;
@@ -610,6 +642,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
         streamId: probeStream,
         dimensions: opts.dimensions,
         distanceMetric: opts.distanceMetric,
+        ...(opts.nativePackage !== undefined && { nativePackage: opts.nativePackage }),
         ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
       });
       // Three points across 2 minutes in 2100. Distinct embeddings.
@@ -698,6 +731,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   private static async _changepointProbe(opts: {
     dimensions: number;
     distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    nativePackage?: 'core' | 'router';
     bindingPath?: string;
   }): Promise<readonly CheckResult[]> {
     const result = await runCheck('changepointDetection', async () => {
@@ -705,6 +739,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
         streamId: `__ruvsdk_probe_cp_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
         dimensions: opts.dimensions,
         distanceMetric: opts.distanceMetric,
+        ...(opts.nativePackage !== undefined && { nativePackage: opts.nativePackage }),
         ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
         changepointWindow: 3,
       });

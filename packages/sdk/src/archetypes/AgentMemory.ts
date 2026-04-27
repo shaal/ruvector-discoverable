@@ -41,6 +41,8 @@ import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { resolveEmbedding, requireEmbedderForString, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import { RouterKbBackend } from '../backends/router-kb.js';
+import type { KbBackend } from '../backends/kb-backend.js';
 import { NativeSonaBackend } from '../backends/native-sona.js';
 import { GraphReasoner } from './GraphReasoner.js';
 import type { LocalLLM } from './LocalLLM.js';
@@ -58,9 +60,25 @@ export interface AgentMemoryOptions {
   readonly storage?: string;
   /**
    * Path to upstream @ruvector/core binary. Falls back to RUVECTOR_CORE_BINDING.
-   * Required because @ruvector/core is not yet published on npm.
+   * Required when `nativePackage: 'core'` (the default) because
+   * @ruvector/core is not yet published on npm. Ignored when
+   * `nativePackage: 'router'`.
    */
   readonly bindingPath?: string;
+  /**
+   * **M19 — choose the NAPI package backing this agent's memory store.**
+   *
+   * Same dispatcher as M18's KnowledgeBase: `'core'` (default) wraps
+   * `@ruvector/core` (env-var workaround needed); `'router'` wraps
+   * `@ruvector/router@0.1.30+` (publish-ready, no env var).
+   *
+   * **Caveat under `'router'`**: `forget(id)` throws `CAPABILITY_DEFERRED`
+   * because `@ruvector/router.VectorDb.delete()` deadlocks (Issue #11).
+   * AgentMemory is otherwise fully usable on the router backend —
+   * remember/recall/SONA/graph-relations all work. Use `'core'` if your
+   * workflow needs to delete individual memories by id.
+   */
+  readonly nativePackage?: 'core' | 'router';
   /** Override capability defaults. */
   readonly capabilities?: AgentMemoryCapabilityConfig;
   /**
@@ -274,7 +292,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
 // ---------------- Implementation ----------------
 
 export class AgentMemory implements ValueReportProvider, FeedbackProvider, HealthCheckProvider {
-  private readonly _backend: NativeCoreBackend;
+  private readonly _backend: KbBackend;
   private readonly _options: AgentMemoryOptions;
   private readonly _sona: NativeSonaBackend | null;
   private readonly _ownsSona: boolean;
@@ -297,7 +315,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   private _vectorMirror = new Map<string, Float32Array>();
 
   private constructor(
-    backend: NativeCoreBackend,
+    backend: KbBackend,
     options: AgentMemoryOptions,
     sona: NativeSonaBackend | null,
     ownsSona: boolean,
@@ -314,12 +332,22 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
 
   static async create(options: AgentMemoryOptions): Promise<AgentMemory> {
     validateEmbedderDimensions(options.embedder, options.dimensions, 'AgentMemory');
-    const backend = await NativeCoreBackend.create({
-      dimensions: options.dimensions,
-      distanceMetric: options.distanceMetric ?? 'Cosine',
-      ...(options.storage !== undefined && { storage: options.storage }),
-      ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
-    });
+    const nativePackage = options.nativePackage ?? 'core';
+    let backend: KbBackend;
+    if (nativePackage === 'router') {
+      backend = await RouterKbBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+      });
+    } else {
+      backend = await NativeCoreBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric: options.distanceMetric ?? 'Cosine',
+        ...(options.storage !== undefined && { storage: options.storage }),
+        ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
+      });
+    }
 
     let sona: NativeSonaBackend | null = null;
     let ownsSona = false;
@@ -540,7 +568,15 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     };
   }
 
-  /** Forget a specific memory by id. Best-effort — backend may share state per Finding B. */
+  /**
+   * Forget a specific memory by id. Best-effort — backend may share state per Finding B.
+   *
+   * **M19 caveat under `nativePackage: 'router'`**: throws `CAPABILITY_DEFERRED`
+   * because `@ruvector/router@0.1.30.VectorDb.delete()` deadlocks (Issue #11).
+   * SDK-side state (`_memoryTags`, `_vectorMirror`) IS still cleared — the
+   * call is documented as a partial-success: tags+mirror cleared, but the
+   * vector remains in the underlying store and is still searchable.
+   */
   async forget(id: string): Promise<boolean> {
     this.assertOpen();
     this._memoryTags.delete(id);
@@ -562,13 +598,17 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
 
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const bindingChecks = await NativeCoreBackend.smokeCheck({
-      dimensions: this._options.dimensions,
-      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
-    });
+    const nativePackage = this._backend.nativePackage ?? 'core';
+    const bindingChecks = nativePackage === 'router'
+      ? await RouterKbBackend.smokeCheck({ dimensions: this._options.dimensions })
+      : await NativeCoreBackend.smokeCheck({
+          dimensions: this._options.dimensions,
+          ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        });
     const archetypeChecks = await AgentMemory._archetypeProbe({
       dimensions: this._options.dimensions,
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      nativePackage,
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
     const sonaSummary: CheckResult = this._sona !== null
@@ -585,7 +625,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     const hyperCheck: CheckResult = this._hyperbolic
       ? await this._hyperbolicProbe()
       : { name: 'hyperbolic', status: 'unsupported', detail: 'hyperbolic: false at create-time', durationMs: 0, tier: 'archetype' };
-    this._lastHealth = summarize('AgentMemory', 'native', [
+    this._lastHealth = summarize('AgentMemory', this._backend.kind, [
       ...bindingChecks, ...archetypeChecks, sonaSummary, graphCheck, autoEmbedCheck, hyperCheck,
     ]);
     return this._lastHealth;
@@ -643,6 +683,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   private static async _archetypeProbe(opts: {
     dimensions: number;
     distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    nativePackage?: 'core' | 'router';
     bindingPath?: string;
   }): Promise<readonly CheckResult[]> {
     let probe: AgentMemory | null = null;
@@ -659,6 +700,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
         agentId: probeAgent,
         dimensions: opts.dimensions,
         distanceMetric: opts.distanceMetric,
+        ...(opts.nativePackage !== undefined && { nativePackage: opts.nativePackage }),
         ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
       });
       const ids: string[] = [];
@@ -700,6 +742,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
         agentId: probeAgent,
         dimensions: dims,
         distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.nativePackage !== undefined && { nativePackage: this._options.nativePackage }),
         ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
         graphReasoner: this._graph!,
       });
@@ -760,6 +803,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
         agentId: probeAgent,
         dimensions: this._options.dimensions,
         distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.nativePackage !== undefined && { nativePackage: this._options.nativePackage }),
         ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
         embedder: this._embedder!,
       });

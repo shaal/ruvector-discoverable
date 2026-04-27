@@ -194,6 +194,111 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M19 outcome (router transport propagated to TSM + AgentMemory; KB-family fully publish-ready)
+
+The M18 dispatcher pattern propagated cleanly to the other two NAPI-core-
+dependent archetypes. `TimeSeriesMemory.create({ nativePackage: 'router' })`
+and `AgentMemory.create({ nativePackage: 'router' })` both run without
+`RUVECTOR_CORE_BINDING`. The KB-family (KB / TSM / AgentMemory) is now
+fully publish-ready against `@ruvector/router@0.1.30`.
+
+**Implementation** (~250 LOC; smaller than M18 because RouterKbBackend
+was already in place):
+
+- `TimeSeriesMemory` and `AgentMemory` now both implement the M18
+  dispatcher: `nativePackage` option (default `'core'`, opt-in `'router'`),
+  `_backend: KbBackend` typing, dispatch in `create()`, dispatch in
+  `healthCheck()`, thread-through in `_archetypeProbe`/`_changepointProbe`/
+  `_autoEmbedProbe`/`_graphMemoryProbe`.
+- `summarize()` calls now use `this._backend.kind` rather than the
+  hardcoded `'native'` literal — so when WASM/HTTP transports land for
+  these archetypes (M19+), the health summary self-labels correctly.
+- Two new demos that run without `RUVECTOR_CORE_BINDING`:
+  `examples/time-series-memory-router-demo/run.mjs` and
+  `examples/agent-memory-router-demo/run.mjs`. Both pass exit 0.
+
+**Behavior under router transport**:
+
+| Operation | KB | TSM | AgentMemory |
+|---|---|---|---|
+| insert/append/remember | ✓ | ✓ | ✓ |
+| search/query/recall | ✓ | ✓ | ✓ |
+| changepoint detection (TSM) | n/a | ✓ (SDK-source, transport-independent) | n/a |
+| SONA continual learning (AM) | n/a | n/a | ✓ (transport-independent) |
+| graph-relations DI (KB/AM) | ✓ | n/a | ✓ |
+| auto-embed via LocalLLM | ✓ | ✓ | ✓ |
+| len/count | ✓ | ✓ | ✓ |
+| **delete/forget** | **✗ Issue #11** | n/a (TSM is naturally append-only) | **✗ Issue #11** |
+| health/metrics | ✗ unsupported | ✗ unsupported | ✗ unsupported |
+| insertBatch (synthesized) | ✓ | ✓ | ✓ |
+
+**Caught live**:
+
+- AgentMemory's `forget()` is the only KB-family operation that hits
+  Issue #11 directly. SDK-side `_memoryTags` and `_vectorMirror` are
+  cleared *before* the backend call, so `forget()` is a documented
+  partial-success: SDK state cleared, vector still in router store.
+  When upstream fixes Issue #11, no SDK code change needed — the throw
+  becomes a passthrough automatically.
+- TSM has no `delete` API at the archetype layer — it's append-only by
+  design (the ring-buffer for changepoints is in-memory and unaffected
+  by Issue #11).
+- Demo authoring bugs (used `result.hits` when actual fields are
+  `points` / `records`) — caught by running the demos, fixed inline.
+  Worth remembering: the M18 KB router demo had the same shape (`size()`
+  vs `len()`); demo author should double-check the archetype's actual
+  return-type field names.
+
+**Drift-by-inversion**: temporarily misrouted TSM's dispatcher
+(`'router'` → `'core'` translation) to verify the failure path. With
+no `RUVECTOR_CORE_BINDING` set, the misrouted call correctly hit
+`BINDING_PATH_REQUIRED`. Restored cleanly. **Plus a TypeScript-level
+catch**: tsc rejected the deliberate equality check `options.nativePackage
+=== 'router'` immediately followed by treating it as `'core'` — the
+type narrowing surfaced the bug at compile time. Static typing as
+drift-inversion partner.
+
+**M8.2 byte-stability verified**: native TSM and AgentMemory demos
+both still hit Issue #03's dimension-mismatch failure mode identical
+to baseline. Failure shape: `Insert failed: Dimension mismatch:
+expected 768, got 16`. Pre-existing; NOT a regression.
+
+**Cross-VectorDb dimension test (M18 finding extends to M19)**: `@ruvector/router`
+doesn't share `@ruvector/core`'s Issue #03 dimension singleton. This
+means a single process can now run KB-family archetypes with different
+dimensions — `KnowledgeBase({ dimensions: 768, nativePackage: 'router' })`
+and `TimeSeriesMemory({ dimensions: 8, nativePackage: 'router' })` co-
+exist cleanly. Previously this required two separate Node processes (or
+matching dimensions) under `'core'` transport. **Multi-archetype DI
+becomes substantially more robust on router**.
+
+**Project state after M19**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- **3 archetypes (KB / TSM / AgentMemory) fully support `nativePackage:
+  'router'`** — eliminating the env-var workaround for the entire
+  core-binding-dependent archetype family
+- 11 paste-ready upstream issues (#01–#11)
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM (native
+  + WASM)
+- v0.4 reprobe (31 npm + 1 CLI)
+- The largest v0.1 UX friction (RUVECTOR_CORE_BINDING) is now optional
+  for ALL three archetypes that previously required it.
+
+**Next ship-task candidates**:
+- **M20**: cross-archetype DI on router — write a demo that wires KB +
+  TSM + AgentMemory + GraphReasoner all under `nativePackage: 'router'`
+  in a single process, demonstrating multi-dimension co-existence the
+  M18 finding implies works.
+- **M17.3**: HTTP transport — blocked on Issue #08 republish of
+  `@ruvector/server`.
+- **`reprobe.mjs` v0.5**: surface-contract probes for binding-method
+  defects (Issue #11 deadlock detection without hanging reprobe).
+
+`docs/upstream-issues/README.md` references unchanged (M19 surfaced no
+new upstream issues — Issue #11 was already filed in M18 and applies
+verbatim here).
+
 ## Update — M18 outcome (Router-backed KnowledgeBase ships; eliminates RUVECTOR_CORE_BINDING env-var requirement)
 
 **The biggest single UX win since M16's README.** `KnowledgeBase.create({
