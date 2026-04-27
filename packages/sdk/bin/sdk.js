@@ -9,20 +9,45 @@
 // makes both forms work after install.
 
 import { runDoctor } from '../dist/cli/doctor.js';
+import { runRecommend } from '../dist/cli/recommend.js';
 
 const HELP = `\
 @ruvector/sdk — task-first archetypes over upstream ruvector
 
 Usage:
+  sdk recommend [flags]        Generate a ruvector.config.ts (interactive or non-interactive)
   sdk doctor <config-path>     Introspect a running SDK config and report degradations
-  sdk recommend                Phase-1B (not yet implemented; see docs/plans/m15-scope.md)
   sdk audit <config-path>      Phase-2 (not yet implemented)
   sdk --help                   Show this message
 
+recommend flags (omit any to run interactively):
+  --workload   <key>           rag-over-docs | agent-memory | graph-reasoning |
+                               time-series-anomaly | local-llm-inference | agent-orchestration
+  --data-size  <bucket>        <1k | 1k-100k | 100k-1M | 1M+
+  --latency    <bucket>        <10ms | <50ms | <200ms | >200ms
+  --updates    <pattern>       mostly-read | daily-batch | streaming | bursty
+  --generate   <yes|no>        whether to wire LocalLLM Phase 2A
+  --out        <path>          output path (default: ./ruvector.config.ts)
+
 Examples:
   sdk doctor ./ruvector.config.ts
-  sdk doctor packages/sdk/examples/sample-config.ts
+  sdk recommend                                        # interactive
+  sdk recommend --workload rag-over-docs --data-size 1k-100k \\
+                --latency '<50ms' --updates daily-batch --generate no \\
+                --out ./ruvector.config.ts             # non-interactive
 `;
+
+function parseFlags(args) {
+  const flags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('--') && i + 1 < args.length) {
+      flags[a.slice(2)] = args[i + 1];
+      i++;
+    }
+  }
+  return flags;
+}
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -51,10 +76,32 @@ if (command === 'doctor') {
   }
 }
 
-if (command === 'recommend' || command === 'audit') {
+if (command === 'recommend') {
+  const rest = args.slice(1);
+  const flags = parseFlags(rest);
+  // Build fromFlags only when at least one workload-relevant flag was set.
+  // If none, run interactive.
+  const fromFlags = {};
+  if (flags.workload)             fromFlags.workload = flags.workload;
+  if (flags['data-size'])         fromFlags.dataSize = flags['data-size'];
+  if (flags.latency)              fromFlags.latency = flags.latency;
+  if (flags.updates)              fromFlags.updates = flags.updates;
+  if (flags.generate !== undefined) fromFlags.generate = flags.generate === 'yes' || flags.generate === 'true';
+  const opts = { fromFlags };
+  if (flags.out) opts.outPath = flags.out;
+  try {
+    await runRecommend(opts);
+    process.exit(0);
+  } catch (e) {
+    process.stderr.write(`sdk recommend: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+}
+
+if (command === 'audit') {
   process.stderr.write(
-    `sdk ${command}: not yet implemented (Phase-1B/2 per docs/plans/m15-scope.md).\n` +
-    `Phase-1A ships 'doctor' only — see https://github.com/ruvnet/ruvector for the upstream roadmap.\n`,
+    `sdk audit: Phase-2 (not yet implemented; see docs/plans/m15-scope.md).\n` +
+    `Phase-1A/B ship 'doctor' + 'recommend' only.\n`,
   );
   process.exit(2);
 }

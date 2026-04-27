@@ -194,6 +194,42 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M15.2 outcome (`recommend` ships; CLI surface complete except audit)
+
+`packages/sdk/src/cli/recommend.ts` + `packages/sdk/src/cli/workloads.ts` ship as Phase-1B. Both interactive and non-interactive paths share the same internal mapper. Per ratified M15 §6: `node:readline` for prompts (no Inquirer); generated TS-module config; data-only workloads table.
+
+**Live demo result** (non-interactive, `agent-orchestration` workload — most complex coupling):
+
+```
+→ Recommended: LocalLLM + GraphReasoner + KnowledgeBase + AgentMemory + AgentFramework
+    coupled: KnowledgeBase ← { LocalLLM, GraphReasoner }
+    coupled: AgentMemory ← { LocalLLM, GraphReasoner }
+    coupled: AgentFramework ← { LocalLLM, KnowledgeBase, AgentMemory, GraphReasoner }
+→ Skip:
+    AgentFramework.mcp  [upstream-binding] @ruvector/rvagent-mcp not published (Issue #07)
+    AgentFramework.a2a  [upstream-binding] @ruvector/rvagent-a2a not published (Issue #07)
+    AgentFramework.acp  [upstream-binding] @ruvector/rvagent-acp not published (Issue #07)
+    AgentFramework.toolCallParsing  [upstream-bug] LLM-driven tool calling depends on Issue #05 fix
+→ Generated: /var/folders/.../agent-config.ts
+```
+
+The Skips column quotes the dormant blocker classification verbatim — auditable from source. **The M9.1 four-blocker classification reaches its 6th payoff layer** (was at 5 in M15.1's doctor): demos → upstream-issue authoring → SDK probe diagnostics → CLI doctor surfacing → CLI doctor suggestion-extraction → **CLI recommend Skips quoting**.
+
+**Caught a real codegen bug live and fixed it inline.** First-pass returned object used `localLLM`/`graphReasoner`/`knowledgeBase` (camelCase from archetype name) but the construction `const`s used short names (`llm`/`graph`/`kb`). Generated config would have failed to type-check on the user's machine. Fixed via a `VAR_NAMES` short-name map shared between construction and return-object emission.
+
+**Drift probe ships at `examples/recommend-drift-probe.mjs`** — asserts every capability named in `WORKLOADS[*].skips[i].capability` exists in the live `introspect().capabilities` set for that archetype. Drift path verified by inversion (renaming `hybridSearch` → `NONEXISTENT_FOR_DRIFT_TEST` in `dist/cli/workloads.js`; probe correctly reports drift; exit 1). Catches future archetype refactors that rename capabilities without updating the workloads table.
+
+**M8.2 diff**: all 7 existing demos byte-stable modulo nondeterminism. The recommend artifacts (workloads.ts, recommend.ts, recommend-drift-probe.mjs, recommend-demo.sh) are pure additions.
+
+**Headline narrative now concrete for v1.0**: 6 archetypes + 2-of-3 CLI subcommands (doctor + recommend; audit deferred Phase-2) + 7 paste-ready upstream issues + a self-correcting reprobe (22 npm + 1 CLI tracked) + a 4-blocker-classification value-report system that surfaces honestly at six layers. The recommend CLI's "auditable from source — no editorial freelancing" property is the bridge between the SDK's getValueReport infrastructure and a developer's first interaction with the SDK.
+
+**v0.2 work-items**:
+- `recommend --local-sdk-path` flag for in-repo / development use cases (generated configs currently import from `'@ruvector/sdk'`).
+- Audit subcommand (Phase-2): compare a config's `_meta.workload` + answers against the WORKLOADS table to surface drift between user edits and the recommended template.
+- Live interactive testing in a terminal (this session ratified the non-interactive path; interactive path was code-reviewed but not exercised in a TTY).
+
+`docs/upstream-issues/README.md` references unchanged (M6 → M14 still accurate).
+
 ## Update — M15.1 outcome (`doctor` ships; CLI surface lives)
 
 `packages/sdk/src/cli/doctor.ts` + `packages/sdk/bin/sdk.js` + `package.json#bin` ship as Phase-1A. `npx sdk doctor <config-path>` introspects a running SDK config and reports degradations end-to-end.
