@@ -220,4 +220,6 @@ The scoping doesn't lock in the API; that's the M5-style frozen surface job. Wha
 
 4. **Re-probing protocol.** Given that ruvllm publication slipped past my M6 scoping, should the SDK have a periodic-re-probe routine? A small script that runs `npm view <pkg> version` for every dormant `upstream-binding` entry and flags discrepancies. ~30 LOC; would have caught this earlier.
 
+   **Resolved in M11.3** (2026-04-27): `tools/reprobe-bindings/reprobe.mjs` ships. 13 packages tracked, parallel probes, drift block paste-ready into m6-scope.md, exit code gates for CI. See M11.3 update in m6-scope.md.
+
 5. **Issue #02 scope expansion.** The umbrella `@ruvector/ruvllm@2.5.4` has the same broken ESM build as `ruvector` and `@ruvector/sona` (Cannot find module 'dist/esm/types' — i.e., `index.js` references files not in the tarball). Three samples is a confirmed pattern; Issue #02 should be updated to add `@ruvector/ruvllm` and recommend a publishing-pipeline audit across the org.

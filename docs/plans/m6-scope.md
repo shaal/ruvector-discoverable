@@ -194,6 +194,25 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M11.3 outcome (periodic re-probe; classification drift detector)
+
+`tools/reprobe-bindings/reprobe.mjs` ships. Maintained list of 13 upstream npm packages whose publication status the SDK's `upstream-binding`-classified dormant entries depend on; runs `npm view <pkg> version` for each in parallel; reports drift vs the most recent ratified scoping (this doc + `m11-scope.md`). Exits 0 on no drift, 1 on drift detected — CI-gate-able.
+
+**Live result (2026-04-27)**: 0 drift. All 10 dormant packages remain unpublished; all 3 positive controls (`@ruvector/ruvllm`, `@ruvector/graph-node`, `@ruvector/sona`) confirm registry reachability and report current versions (2.5.4 / 2.0.3 / 0.1.6).
+
+**Drift-detection path verified by inverting `@ruvector/ruvllm`'s expected status during testing**: the script produced the exact ⚠ flag and paste-ready Markdown block this entry would otherwise need to author by hand. The kind of artifact M11 scoping had to write longhand can now be regenerated in seconds.
+
+**Why a maintained list rather than runtime SDK introspection**: I considered driving the PROBES list from the archetypes' `getValueReport()` output, filtering dormant entries with `blocker === 'upstream-binding'`, and mapping source crates to npm packages via a lookup table. Rejected as overengineering for a ~60-LOC tool — runtime introspection would need the core NAPI binding present, triple the LOC, and still require a manually-maintained source-crate→npm-package map. The current design names the maintenance protocol explicitly in the script's header: re-run after every milestone, ratify any flips into this doc, edit the PROBES table.
+
+**Cadence recommendation**: re-run at every milestone close, AND any time scoping touches dormant `upstream-binding` classification. The cost is ~3 seconds wall-clock; the cost of skipping it has historical precedent (4 milestones of misclassification on `@ruvector/ruvllm`).
+
+**Generalizes the M6.2 self-correcting-classification pattern at the publication-status layer**. M6.2 made the in-process probe observation override the static catalog ("when upstream fixes Cypher, the next healthCheck() flips it to active"). M11.3 does the same at the npm-registry layer ("when upstream publishes a binding we said wasn't on npm, the next reprobe.mjs run flags it"). Both are observation-over-declaration, just at different layers.
+
+**v0.2 work-items**:
+- A `--include-pre-release` flag to also probe `@ruvector/<pkg>@beta` / `@next` tags. Right now the script reports the latest stable version only.
+- Add the script to a CI job (when CI exists; M9 PRD §7 listed CI as an open question).
+- If M11 open question #5 (Issue #02 scope expansion to add `@ruvector/ruvllm`) lands as a published-fix, the SDK's umbrella-load fallback for ruvllm could be removed; reprobe would then naturally surface that opportunity.
+
 ## Update — M11.2 outcome (cross-archetype embed propagation)
 
 `LocalLLM.embed()` now propagates across `KnowledgeBase`, `TimeSeriesMemory`, and `GraphReasoner` via an optional `embedder: LocalLLM` constructor parameter. When wired, the archetypes derive missing embeddings from text:
