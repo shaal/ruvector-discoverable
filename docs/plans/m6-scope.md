@@ -194,6 +194,29 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M12 scoping (LocalLLM Phase 2; M11's plan needs revision)
+
+`docs/plans/m12-scope.md` is the LocalLLM Phase 2 scoping report. Headline finding overturning M11:
+
+**`@ruvector/ruvllm`'s NAPI binding has no `model_path` config field.** Probed live via the installed package's TypeScript source: both `RuvLLMConfig` (JS-layer) and `NativeConfig` (NAPI-layer) lack any model-path / model-loading equivalent. M11's plan to ship `LocalLLM.create({ model: path })` over the NAPI transport is **not viable** as written — the field would be silently ignored (verified by passing `{ model_path: '/tmp/nonexistent.gguf' }` to `new RuvLlmEngine(...)` — accepted without throwing, no effect).
+
+**Two model-loading paths are real, neither via NAPI**:
+- CLI subprocess (`@ruvector/ruvllm-cli@0.1.1`, documented `--model` flag).
+- WASM (`@ruvector/ruvllm-wasm@2.0.2`, not re-probed live in this pass).
+
+**Live behavior confirms M11 scoping's "gibberish without model" observation**: `generate('Once upon a time', { maxTokens: 8 })` returns a plain `string` (not the M5 `GenerateResult`), value `"q8&other_N6q or&_qxsaid+<~xof88toabout5of"`. `query()` returns rich shape with same gibberish text.
+
+**Recommended Phase 2 split**:
+- **Phase 2A (NAPI honesty pass)**: wrap `query`/`route`/`generate` over the existing NAPI backend. Surface as `[upstream-bug] generate` with a tier-3 `generate-non-gibberish` probe that auto-flips to active when upstream wires real weights. Same M6.2 self-correcting pattern as the Cypher stub.
+- **Phase 2B (CLI subprocess transport)**: ship a `cli` backend variant; the only path that actually loads a GGUF today.
+- **Phase 2C (WASM)**: deferred until 2A+2B settle and a browser use-case demands it.
+
+**Reused the M11.3 re-probe tool successfully**: `tools/reprobe-bindings/reprobe.mjs` ran clean (0 drift, 13 packages) before any of the deeper investigation. Re-probe-before-trust is now operationally part of the scoping pattern, not just a recommendation.
+
+**5 open questions for the user** in m12-scope.md §6 — they lock the Phase 2A vs 2B split, KB.ask coupling decision, model-strategy choice (auto-download vs explicit path), upstream Issue #05 framing, and the LocalLLM.feedback shared-SONA question.
+
+**`design-deferred` should drop from 4 to ~1 in Phase 2A**: `generate` and `streaming` flip dormant→broken-but-classified (probe observation), `feedback` flips dormant→sdk-integration when wired, `localMemory` stays deferred pending AgentMemory archetype scope decision.
+
 ## Update — M11.3 outcome (periodic re-probe; classification drift detector)
 
 `tools/reprobe-bindings/reprobe.mjs` ships. Maintained list of 13 upstream npm packages whose publication status the SDK's `upstream-binding`-classified dormant entries depend on; runs `npm view <pkg> version` for each in parallel; reports drift vs the most recent ratified scoping (this doc + `m11-scope.md`). Exits 0 on no drift, 1 on drift detected — CI-gate-able.
