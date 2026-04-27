@@ -194,6 +194,25 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M13 scoping (AgentMemory; 2 of 5 named bindings actually published)
+
+`docs/plans/m13-scope.md` filed. AgentMemory's headline `gnnLearning` differentiator (per M4 ratification) is **gated on `@ruvector/gnn-node` which remains unpublished** — same shape as M11's pre-Phase-1 LocalLLM situation. Re-probed via `tools/reprobe-bindings/reprobe.mjs` first (M11.3+v0.2 lesson applied up front); 0 drift since M12.5.
+
+**Headline finding from a live binding probe**: `RuvLLM.searchMemory(text, k)` returns `{id, score, content, metadata}` — almost the exact `RecalledMemory` shape AgentMemory's `recall()` needs. This is the M11.1 "localMemory boundary" decision come due. The scoping doc ratifies it as Q2, with three options (own-API, both-expose, delegate-under-the-hood).
+
+**Phase 1A recommended**: `core` + optional `sona` + optional `graphReasoner` (parallels KB's M9/M10 wiring). Of 11 catalog rows, 5 default-active, 3 sdk-integration (user-toggle), 3 upstream-binding (probe via reprobe.mjs), with `hyperbolic` and `autoEmbed` ratified-pending in §6.
+
+**Two earlier-deferred boundary questions come due**:
+- shared-SONA across archetypes (M12 §6 Q5 deferred → M13 §6 Q1).
+- localMemory ↔ AgentMemory.addMemory boundary (M11.1 design-deferred → M13 §6 Q2).
+
+**Three patterns surfaced for future-cycle codification**:
+- AgentMemory will be the 4th archetype using M11.2's optional-embedder pattern. With 3 working samples (KB, TSM, GR) and a 4th coming, the v0.2 helper-extraction work-item flagged in M11.2 is now ready (same threshold M8.2 used for the reducer extraction).
+- `NativeSonaBackend` adapter pattern is now stable (proven in KB's M10; will lift verbatim to AgentMemory). Worth a "shared-adapters" subdir if a 5th archetype lands.
+- Hand-rolled SDK-source capabilities (M10.1 changepoint, candidate M13.1 hyperbolic-distance scorer) — a parallel pattern to M11.2's autoEmbed where the SDK's source-of-truth is named explicitly in `getValueReport().active[i].source`.
+
+**Project state**: 17 active SDK capabilities / 24 dormant unchanged (no SDK code; scoping doc is the deliverable). 5 archetypes implemented; AgentMemory and AgentFramework remain M5-frozen-stubs awaiting their respective scoping passes. M13.1 (Phase 1A) sized at 1 focused session per the lift-from-KB pattern.
+
 ## Update — M12.5 (probe-diagnostic loop closed)
 
 `packages/sdk/src/backends/native-ruvllm.ts` updated: the `queryConfidenceBounded` and `routeDecisionShape` detail strings (and the M12.1 comment block above them) now reference `upstream-issues/06` and name the JS-wrapper case-rename mismatch — replacing M12.1's wrong "native struct under-populated" attribution. Diagnostic-only change; same probe assertion logic, same `broken` status, same enumerated missing fields. Closes the explicit "will be updated in a follow-up" loop named in the M12.4 entry below and in Issue #06's "Detection by an integrating SDK" section.
