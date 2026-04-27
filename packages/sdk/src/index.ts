@@ -102,6 +102,7 @@ export type {
   ToolCall,
   SubagentCall,
   PeerDescriptor,
+  FrameworkTool,
 } from './archetypes/AgentFramework.js';
 
 // Cross-cutting types

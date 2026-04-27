@@ -186,6 +186,9 @@ async function exerciseLocalLLM(): Promise<void> {
 
 async function exerciseAgentFramework(): Promise<void> {
   const fw: AgentFramework = await pending();
+  // M14.1 Phase-1A: pure-orchestration shell. Cross-archetype DI via { llm,
+  // kb, memory, graph, subagents }. maxCostUsd is M5-typed but deferred to
+  // Phase-2 (Q4 ratification — needs upstream Issue #05 fix for real costs).
   await AgentFramework.create({
     agentId: 'orchestrator',
     capabilities: { mcp: true, a2a: false, policy: true },
@@ -198,12 +201,17 @@ async function exerciseAgentFramework(): Promise<void> {
   });
   const res: TaskResult = await fw.run({ prompt: 'plan a deploy', context: { repo: 'foo' } });
   void res.toolCalls[0]?.tool;
+  void res.subagentCalls[0]?.agentId;
+  void res.taskId;
 
-  const peers = await fw.discoverPeers();
-  if (peers[0]) {
-    const fanout: TaskResult = await fw.dispatchToPeer(peers[0], { prompt: 'help' });
-    void fanout.durationMs;
-  }
+  // Q2: explicit invokeTool — the only path that populates toolCalls in v0.1.
+  void await fw.invokeTool('search-docs', { query: 'deploy' });
+
+  void await fw.healthCheck();
+
+  // Q3: discoverPeers / dispatchToPeer throw [upstream-binding] — the
+  // surface compiles but runtime throws for v0.1.
+  await fw.discoverPeers().catch(() => {});
   await fw.close();
 }
 

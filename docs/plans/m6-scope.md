@@ -194,6 +194,47 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M14.1 outcome (AgentFramework Phase-1A — sixth archetype lands; archetype frontier closes)
+
+`AgentFramework` shipped end-to-end. **All 6 headline archetypes now implemented**: KB / TSM / GR / LocalLLM / AgentMemory / AgentFramework. The M5 surface freeze has fully thawed; the project's headline-archetype frontier closes.
+
+Per M14 §6 ratification, all 5 open questions answered along my leans:
+- Q1 no MCP integration in Phase-1A (scope-tight; Phase-1B candidate via `@modelcontextprotocol/sdk`)
+- Q2 toolCalls populated only via explicit `invokeTool`; no LLM-driven parsing until Issue #05 fix gives a real model
+- Q3 no SDK-source A2A; `discoverPeers`/`dispatchToPeer` throw `CAPABILITY_DEFERRED` with a clear upstream-binding pointer
+- Q4 subset policy: `maxTokens` (chars/4 proxy), `maxDurationMs`, `maxConcurrency` wired; `maxCostUsd` deferred until #05 enables real cost models
+- Q5 ship Phase-1A as v1.0 with 0-of-4 protocols active and explicit dormant-row honesty
+
+**Project-wide value-report breakdown — six archetypes**:
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| GraphReasoner | 3 | 6 | 4 | 1 | 1 | 0 |
+| KnowledgeBase | 6 | 4 | 3 | 0 | 1 | 0 |
+| TimeSeriesMemory | 5 | 5 | 4 | 0 | 1 | 0 |
+| LocalLLM | 3 | 9 | 3 | 3 | 0 | 3 |
+| AgentMemory | 7 | 5 | 3 | 0 | 2 | 0 |
+| **AgentFramework** | **7** | **5** | **3** | **1** | **1** | **0** |
+| **Total** | **31** | **34** | **20** | **5** | **6** | **3** |
+
+(AgentFramework's row reflects the demo's full DI: llm + kb + memory + subagent + policy = 7 active. The 5 dormant: 1 sdk-integration `graphReasoning` (no graph wired), 3 upstream-binding `mcp`/`a2a`/`acp`, 1 upstream-bug `toolCallParsing` linked to Issue #05.)
+
+**Live finding caught and resolved during implementation**: the M5-typed `ToolDefinition` already exists on `LocalLLM` (carries a `parameters` schema for protocol declaration). AgentFramework's tool-registration shape needed a different field — `handler: (args) => Promise<unknown>` for execution. Renamed AgentFramework's to `FrameworkTool` to disambiguate. Two genuinely different concepts now have two clear names.
+
+**Cross-archetype DI pattern reaches 7th/8th uses** in AgentFramework's `{ llm, kb, memory, graph, subagents }` constructor. Each is optional; each toggles a catalog row from dormant to active when wired. Same M9/M10/M11.2/M13.1 pattern.
+
+**v0.2 work-items captured inline**:
+- Real token counts in policy enforcement (currently chars/4 proxy) once upstream Issue #05 lands and an LLM exposes a tokenizer.
+- LLM-driven tool-call parsing (currently framework-driven only per Q2) once a real model produces structured tool-call output.
+- MCP integration via public `@modelcontextprotocol/sdk` (Phase-1B per Q1).
+- A2A / ACP wire-up when upstream rvagent-* publishes (caught automatically by reprobe.mjs once added to PROBES).
+- Sub-agent depth cap (`SUBAGENT_MAX_DEPTH` constant present but not yet enforced — guards against infinite recursion via mutual sub-agent inclusion).
+
+**6 of 6 archetypes implemented; the M5 surface freeze fully thaws.** Next milestones shift the project's center of gravity:
+- M15 candidate: `recommend`/`doctor` CLI per PRD §5.5 — now meaningful with 6 working archetypes.
+- M16 candidate: 3-backend transport story per PRD §5.1 (native/wasm/http; only native shipped today).
+- M11.2's `_resolveEmbeddings` extraction precedent stands for any future shared-lifecycle helper extraction (3rd archetype-base case has not yet emerged).
+
 ## Update — M14 scoping (AgentFramework; 0 of 9 named bindings published)
 
 `docs/plans/m14-scope.md` filed. AgentFramework is the **last M5-frozen-stub**; M14.1 closes the headline-archetype frontier. **0 of 9 named rvagent-* bindings published** (verified across 12 plausible naming conventions including 3 alternatives) — worst publication ratio of any archetype scoped to date. M11.3+v0.2 re-probe applied first; 0 drift since M13.2.
