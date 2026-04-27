@@ -74,6 +74,23 @@ const PROBES = [
   { pkg: '@ruvector/rvagent-tools',         expect: 'unpublished', notes: 'AgentFramework — tool registry' },
   { pkg: '@ruvector/rvagent-subagents',     expect: 'unpublished', notes: 'AgentFramework — subagent dispatch (SDK ships own)' },
   { pkg: '@ruvector/rvagent-cli',           expect: 'unpublished', notes: 'AgentFramework — CLI binary' },
+
+  // ===== Transport surface (M17 ratification; v0.4) =====
+  // M17 scoping live-probed these. Adds drift detection across the entire
+  // PRD §5.1 backend story (native ✓ shipped; wasm + http outstanding).
+  // expect 'published-broken' means: npm view returns a version, but the
+  // tarball is missing files referenced by package.json#main. Drift in
+  // either direction is meaningful (fixed → wire transport; lost →
+  // upstream un-published).
+  { pkg: '@ruvector/graph-wasm',            expect: 'published',         notes: 'WasmGraphBackend (M17.1) target; richer than graph-node per .d.ts (delete/import/export)' },
+  { pkg: '@ruvector/ruvllm-wasm',           expect: 'published',         notes: 'WasmLocalLLMBackend (M17.2) target; 45 exports vs NAPI 14' },
+  { pkg: '@ruvector/rvf-wasm',              expect: 'published',         notes: 'RVF wasm — adjacent to advanced/ surface; not currently consumed' },
+  { pkg: '@ruvector/ruqu-wasm',             expect: 'published',         notes: 'Quantum-coherence wasm; advanced/ candidate' },
+  { pkg: '@ruvector/ospipe-wasm',           expect: 'published',         notes: 'OS-pipe wasm; unrelated to current archetypes' },
+  { pkg: '@ruvector/router',                expect: 'published',         notes: 'Stealth-published VectorDb (M17 finding); v0.3 candidate as KB backend independent of @ruvector/core' },
+  { pkg: '@ruvector/server',                expect: 'published-broken',  notes: 'HTTP transport blocked by Issue #08 (broken-publish); drift = upstream republished cleanly' },
+  { pkg: '@ruvector/cluster',               expect: 'published-broken',  notes: 'Cluster orchestration blocked by Issue #08 (broken-publish); same defect class' },
+  { pkg: '@ruvector/rvf-mcp-server',        expect: 'published',         notes: 'MCP-shape server; AgentFramework Phase-1B candidate when MCP wire-up ratified' },
 ];
 
 // =====================================================================
@@ -133,13 +150,38 @@ const CLI_PROBE_TIMEOUT_MS = 10_000;
 // =====================================================================
 // NPM probe
 // =====================================================================
-async function probe(pkg) {
+//
+// Two-phase probe:
+//   Phase 1 — `npm view <pkg> version` answers "is anything published?"
+//   Phase 2 — for entries where `expect === 'published-broken'`, also run
+//             `npm view <pkg> main files` and verify the tarball is still
+//             missing the main-referenced files (Issue #02 / #08 pattern).
+//             Drift = files appeared = upstream republished cleanly.
+//
+// Returns one of:
+//   { status: 'published',        version: '...' }
+//   { status: 'published-broken', version: '...', detail: 'main=X but tarball lacks X' }
+//   { status: 'unpublished',      version: null }
+//   { status: 'timeout',          version: null }
+//   { status: 'error',            version: null, errorDetail: '...' }
+async function probe(pkg, expect) {
   try {
     const { stdout } = await exec('npm', ['view', pkg, 'version'], {
       timeout: PROBE_TIMEOUT_MS,
     });
     const v = stdout.trim();
-    return v ? { status: 'published', version: v } : { status: 'unpublished', version: null };
+    if (!v) return { status: 'unpublished', version: null };
+
+    // For published-broken expectations, do the tarball-content check.
+    if (expect === 'published-broken') {
+      const brokenDetail = await checkBrokenPublish(pkg);
+      if (brokenDetail) {
+        return { status: 'published-broken', version: v, detail: brokenDetail };
+      }
+      // The package is now published cleanly — drift event.
+      return { status: 'published', version: v };
+    }
+    return { status: 'published', version: v };
   } catch (e) {
     if (e.killed || e.code === 'ETIMEDOUT') return { status: 'timeout', version: null };
     const stderr = (e.stderr ?? '').toString();
@@ -147,6 +189,43 @@ async function probe(pkg) {
       return { status: 'unpublished', version: null };
     }
     return { status: 'error', version: null, errorDetail: stderr.split('\n').slice(-3).join(' ').trim() || e.message };
+  }
+}
+
+/**
+ * Returns null if the package is published with its main-referenced file
+ * present (or its main isn't declared), else returns a human-readable detail
+ * string describing what's missing from the tarball.
+ *
+ * Uses `npm view <pkg> --json` to fetch main + files declarations without
+ * downloading the tarball. That's deliberately cheap; the `npm pack
+ * --dry-run` alternative actually fetches the tarball and is slower. The
+ * file-list npm returns from `view` is the same as the tarball's files.
+ */
+async function checkBrokenPublish(pkg) {
+  try {
+    const { stdout } = await exec('npm', ['view', pkg, '--json'], {
+      timeout: PROBE_TIMEOUT_MS,
+    });
+    const meta = JSON.parse(stdout);
+    const main = typeof meta.main === 'string' ? meta.main : null;
+    if (!main) return null; // No main declared = no broken-main concern.
+    // `npm view --json` returns `dist.fileCount`. Broken-publish packages
+    // (Issue #02 / #08) ship with fileCount=2 (just package.json + README)
+    // even when their package.json declares a `main` referencing a missing
+    // file. Working packages with a main almost always have fileCount >= 3
+    // (package.json + README + at least the main file).
+    const fileCount = meta?.dist?.fileCount ?? null;
+    if (fileCount !== null && fileCount <= 2) {
+      const unpackedSize = meta?.dist?.unpackedSize ?? '?';
+      return `main='${main}' declared; tarball fileCount=${fileCount} (unpackedSize=${unpackedSize}B) — main file missing`;
+    }
+    return null;
+  } catch {
+    // If the deep check fails for any reason (network, parse), assume the
+    // expected `broken` state still holds rather than erroring the whole
+    // reprobe. The phase-1 `published` status is still informative.
+    return 'tarball-content check skipped (npm view --json unavailable)';
   }
 }
 
@@ -212,12 +291,12 @@ async function probeCli(entry) {
 // =====================================================================
 // Main
 // =====================================================================
-console.log('# Upstream re-probe (M11.3 v0.2)\n');
+console.log('# Upstream re-probe (M11.3 v0.4 — M17 ratification: +9 transport rows)\n');
 const startedAt = new Date().toISOString();
 console.log(`Probed ${PROBES.length} npm packages + ${CLI_PROBES.length} CLI binaries at ${startedAt}.\n`);
 
 console.log('## NPM publication status\n');
-const results = await Promise.all(PROBES.map(async (p) => ({ ...p, observed: await probe(p.pkg) })));
+const results = await Promise.all(PROBES.map(async (p) => ({ ...p, observed: await probe(p.pkg, p.expect) })));
 console.log('| Status | Package | Expected | Observed | Notes |');
 console.log('|---|---|---|---|---|');
 for (const r of results) {
@@ -226,9 +305,10 @@ for (const r of results) {
     : r.observed.status === 'timeout' ? '?'
       : r.observed.status === 'error' ? '!'
         : '⚠';
-  const obs = r.observed.version ? `published@${r.observed.version}`
-    : r.observed.status === 'error' ? `error: ${r.observed.errorDetail ?? '(no detail)'}`
-      : r.observed.status;
+  const obs = r.observed.status === 'published-broken' ? `broken@${r.observed.version}`
+    : r.observed.version ? `published@${r.observed.version}`
+      : r.observed.status === 'error' ? `error: ${r.observed.errorDetail ?? '(no detail)'}`
+        : r.observed.status;
   console.log(`| ${emoji} | \`${r.pkg}\` | ${r.expect} | ${obs} | ${r.notes} |`);
 }
 
@@ -279,13 +359,20 @@ console.log('```markdown');
 console.log(`### Re-probe drift — ${startedAt}`);
 console.log('');
 for (const d of npmDrifts) {
-  const obs = d.observed.version ? `published@${d.observed.version}` : d.observed.status;
-  const action = d.expect === 'unpublished' && obs.startsWith('published')
+  const obs = d.observed.status === 'published-broken' ? `broken@${d.observed.version}`
+    : d.observed.version ? `published@${d.observed.version}`
+      : d.observed.status;
+  const action = d.expect === 'unpublished' && d.observed.status.startsWith('published')
     ? 'Wire it (sdk-integration) OR update dormant reason; classification was wrong.'
     : d.expect === 'published' && d.observed.status === 'unpublished'
       ? 'Upstream un-published or registry name changed — investigate before re-classifying.'
-      : 'Investigate.';
+      : d.expect === 'published-broken' && d.observed.status === 'published'
+        ? 'Upstream republished cleanly — Issue #02 / #08 may be fixed; verify, then close issue + wire transport.'
+        : d.expect === 'published-broken' && d.observed.status === 'unpublished'
+          ? 'Upstream un-published the broken package — re-evaluate transport plan.'
+          : 'Investigate.';
   console.log(`- npm: \`${d.pkg}\`: expected=\`${d.expect}\`, observed=\`${obs}\``);
+  if (d.observed.detail) console.log(`  - Detail: ${d.observed.detail}`);
   console.log(`  - Affected: ${d.notes}`);
   console.log(`  - Action: ${action}`);
 }

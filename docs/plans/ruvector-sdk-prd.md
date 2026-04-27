@@ -525,6 +525,55 @@ The SDK is successful when:
 
 ---
 
+## 11. SDK ↔ Upstream relationship policy *(added M17 ratification, 2026-04-27)*
+
+The SDK is a **consumer** of upstream `github.com/ruvnet/ruvector`. We do not control upstream's release schedule, defect-fix priorities, or breaking-change cadence. This section formalizes how the SDK responds to upstream changes so that downstream consumers experience predictable behavior even when upstream churns.
+
+### 11.1 Hard rules (govern every milestone)
+
+1. **Never block SDK delivery on an upstream fix.** When the SDK encounters an upstream defect, it (a) classifies the affected capability `dormant` with a blocker reason, (b) files a paste-ready bug report at `docs/upstream-issues/`, (c) ships around it. As of M17 ratification, 8 paste-ready issues have been filed (#01–#08); none have blocked a milestone.
+
+2. **Re-probe before relying on prior-doc upstream claims.** `tools/reprobe-bindings/reprobe.mjs` is the authoritative ground truth. Run it at every milestone close. M11 / M12 / M17 each caught a stale upstream-state claim that earlier scoping had treated as fact.
+
+3. **Trust observed status over declared status.** Catalog rows declare a default `active`/`dormant`; live binding probes override the declared status with what the binding actually does. When upstream fixes a stub, the SDK reclassifies automatically (M6.2 / M11.3 self-correcting-classification pattern).
+
+4. **The diagnostic infrastructure IS the bug-report-evidence infrastructure.** Probe diagnostics (`[observed via probe '...', status=broken] ...`) are lifted verbatim into upstream issue bodies. No editorial rewriting; one investment, two payoffs.
+
+### 11.2 SDK versioning policy
+
+The SDK uses semver, with explicit upstream-snapshot tracking because upstream churn is the largest source of breakage we'll see.
+
+| Bump | Trigger |
+|---|---|
+| **patch** (`0.0.x`) | SDK-only changes: doc fixes, internal refactors, new probe rows, classification updates. Upstream snapshot unchanged. |
+| **minor** (`0.x.0`) | Additive surface changes: new archetype, new CLI subcommand, new transport backend, dormant→active flips driven by upstream changes the SDK now exposes. Old code paths continue to work. |
+| **major** (`x.0.0`) | Breaking SDK surface change. Reserved for: upstream forced a non-translatable break the SDK can't shim; OR an SDK-side architectural rewrite. Both should be rare. |
+
+Every SDK release names a **verified upstream snapshot** — the `PROBES` table in `tools/reprobe-bindings/reprobe.mjs` at the release commit. Re-running reprobe against today's npm registry surfaces drift; that drift drives the next milestone.
+
+### 11.3 Response patterns by upstream-change type
+
+| Upstream change | SDK response |
+|---|---|
+| **Additive — new method, new package** | Next minor bump exposes the capability. New catalog row + new probe. dormant→active reclassification automatic via M6.2 pattern when binding ships. |
+| **Surface regression — method removed/renamed** | SDK records reproducer at `docs/upstream-issues/`. Affected capability flips active→dormant `[upstream-bug]`. CHANGELOG names user-facing impact. Consumer sees the regression *via the SDK's value report*, not as a runtime crash. |
+| **Defect fix — broken binding starts working** | Next reprobe surfaces the publication change. Next `healthCheck()` run flips dormant→active. **No SDK code change needed** — same probe + classification machinery. |
+| **Breaking change in upstream major** | SDK major-bump for the dependency line, OR transitional SDK layer if feasible. SDK CHANGELOG names the upstream version delta. |
+
+### 11.4 What consumers see
+
+The SDK's `getValueReport()` always names the **observed upstream-package versions** it's running against. Consumers can compare to the SDK release's "verified" snapshot to know whether they're on a tested path. If observed differs from verified (consumer installed a newer upstream binding manually), the SDK's probe diagnostics still apply — they assert behavior, not version strings.
+
+The SDK never *silently* degrades. Every degradation surfaces in `value-report.dormant[]` with a reason and an `enable` string (where applicable). Consumers wanting a CI gate against degradation use `sdk audit --strict` — which exits 1 on any sdk-integration-suggestion row, including the ones triggered by upstream regressions.
+
+### 11.5 What this policy explicitly does NOT do
+
+- It does not promise to *fix* upstream defects. The SDK's role is to make them visible and to ship around them.
+- It does not promise the SDK will track every upstream release the day it lands. Reprobe runs at milestone close; consumers wanting faster cadence run reprobe themselves.
+- It does not promise SDK API stability across upstream majors. An upstream major may force an SDK major. The CHANGELOG is the canonical record of which upstream version delta drove each SDK major.
+
+---
+
 ## Appendix A — Upstream inventory snapshot (informational)
 
 Captured 2026-04-26 from cloned upstream. Numbers below are from `ls`; the 164 real-crates count is from the M1 cataloger's authoritative on-disk walk.

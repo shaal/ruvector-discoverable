@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Scoping (no implementation yet) |
+| Status | **Ratified** — all 7 open questions answered per leans (2026-04-27) |
 | Date | 2026-04-27 |
-| Decision needed from user | Open Questions §6 below |
 | Predecessors | M11 / M12 scoping (LocalLLM); M6 v0.1 native-graph adapter; v0.2 polish batch |
-| PRD reference | §5.1 Backends — `native` ✓ shipped; `wasm` and `http` outstanding |
+| PRD reference | §5.1 Backends — `native` ✓ shipped; `wasm` and `http` outstanding. §11 (NEW) names the SDK ↔ upstream policy this milestone formalizes. |
+| Next ship-task | **M17.1** — `WasmGraphBackend` for GraphReasoner, mirroring `native-graph.ts`'s pattern |
 
 This is a scoping pass, not a ship-task. Goal: figure out the realistic shape of the WASM and HTTP backends *before* committing to delivery, same pattern as M6 / M11 / M12 / M13 / M14 / M15 scoping docs.
 
@@ -208,23 +208,42 @@ Path B / C are not *wrong*. They're slower wins than A and add operational surfa
 
 ---
 
-## Open questions for ratification
+## Open questions — RATIFIED 2026-04-27
 
-These are the decisions that lock the next ship-task's contents. My leans included; the user ratifies.
+All 7 ratified per the leans. The SDK ↔ upstream relationship this drives is now formalized in PRD §11. Each ratification below is binding for M17.x ship-tasks.
 
-1. **Path A vs B vs C?** — Lean A (WASM-first, HTTP after Issue #08).
+1. **Path A** ✓ (WASM-first; HTTP deferred until Issue #08 lands or build-from-Rust-crate ratified separately).
 
-2. **Issue #08 (`@ruvector/server` + `@ruvector/cluster` broken-publish): file standalone or fold into Issue #02?** — Lean **standalone**. Issue #02 covers three specific umbrella packages by name; #08 covers two different packages with the same defect class. Listing the new packages in #02 dilutes its scope; a separate report makes the upstream-fix tractable. (Same precedent as Issue #07 spinning out of #02.)
+2. **Issue #08 standalone** ✓ — filed at `docs/upstream-issues/08-server-cluster-broken-publish.md`. Listed in upstream-issues README. Reprobe v0.4 tracks both `@ruvector/server` and `@ruvector/cluster` with `expect: 'published-broken'`; drift = upstream republished cleanly.
 
-3. **`reprobe.mjs` v0.4: extend by which packages?** — Lean **add 9** rows: `@ruvector/server`, `@ruvector/cluster`, `@ruvector/router`, `@ruvector/graph-wasm`, `@ruvector/ruvllm-wasm`, `@ruvector/rvf-wasm`, `@ruvector/ruqu-wasm`, `@ruvector/ospipe-wasm`, `@ruvector/rvf-mcp-server`. The first two have `expect: 'broken'` annotations; rest are `expect: 'published'`. Drift surfaces if upstream republishes #08 packages or drops any of the 7 working ones.
+3. **`reprobe.mjs` v0.4** ✓ — shipped. Tracks 31 npm + 1 CLI (was 22+1). New rows:
+    - `@ruvector/graph-wasm` (expect published) — M17.1 target
+    - `@ruvector/ruvllm-wasm` (expect published) — M17.2 target
+    - `@ruvector/rvf-wasm`, `@ruvector/ruqu-wasm`, `@ruvector/ospipe-wasm` (expect published) — adjacent surfaces, monitoring
+    - `@ruvector/router` (expect published) — stealth-published; v0.3 KB-backend candidate
+    - `@ruvector/server`, `@ruvector/cluster` (expect published-broken) — Issue #08 anchor
+    - `@ruvector/rvf-mcp-server` (expect published) — AgentFramework Phase-1B candidate
+    Includes a new `published-broken` expectation that uses `npm view --json`'s `dist.fileCount` to detect tarball-content-vs-declared-main mismatches. Drift-by-inversion verified (flipping `@ruvector/router` to `expect: 'unpublished'` correctly fires exit-1 drift).
 
-4. **WASM init lifecycle: hide in `archetype.create()` or expose explicit `await sdk.init()`?** — Lean **hide in `create()`**. Same UX as native (sync constructor from user's POV, async work happens internally). Adapter reads .wasm bytes from `require.resolve` in Node, defers to bundler in browser. User code is identical across transports.
+4. **WASM init lifecycle: hide in `archetype.create()`** ✓ — adapter owns `init({ module_or_path: bytes })` in Node and `init()` in browser. User code is transport-agnostic.
 
-5. **Backend auto-selection rule?** — Lean **explicit-first, auto-fallback**: `options.transport: 'native' | 'wasm' | 'http'` overrides; default is `typeof process !== 'undefined' && process.versions?.node ? 'native' : 'wasm'`. HTTP requires explicit opt-in (no env-sniff to avoid surprising remote calls).
+5. **Backend auto-selection: explicit-first, auto-fallback** ✓ — `options.transport: 'native' | 'wasm' | 'http'` overrides. Default: `typeof process !== 'undefined' && process.versions?.node ? 'native' : 'wasm'`. HTTP requires explicit opt-in (no env-sniff to avoid surprising remote calls).
 
-6. **`@ruvector/router` stealth-publication: M17 concern or v0.3 separate workstream?** — Lean **separate workstream**. M17 is multi-transport; router is "alternative to unpublished `@ruvector/core` for KB's vector path." Combining the two confuses the abstraction layer (router is itself NAPI, not a transport choice). Worth its own scoping pass post-M17.
+6. **`@ruvector/router` is a SEPARATE v0.3 workstream** ✓ — not folded into M17. Reprobe tracks it; when v0.3 begins, it gets its own scoping doc.
 
-7. **WASM Cypher stub: assume same as Issue #01 or smoke-probe to confirm?** — Lean **smoke-probe** during M17.1. A 30-line probe call with `MATCH (n) RETURN n` after an insert tells us whether WASM shares the bug. Either outcome is useful (active capability OR a third paste-ready issue lifting the diagnostic verbatim, per M11.2 / M12.4 / M12.5 pattern).
+7. **WASM Cypher stub: smoke-probe in M17.1** ✓ — M17.1's tier-3 health check runs `MATCH (n) RETURN n` after an insert; result drives `cypher` capability classification (active vs `dormant [upstream-bug]`). Either outcome is useful per the M6.2 self-correcting pattern.
+
+### Binding implications for M17.1
+
+Given the ratification, M17.1's contract is:
+
+- File: `packages/sdk/src/backends/wasm-graph.ts`
+- Mirrors `native-graph.ts`'s adapter shape; same SmokeCheckProvider interface
+- Loads `@ruvector/graph-wasm@2.0.2` with explicit byte-init in Node
+- Health checks: `insertNode`, `insertEdge`, `stats`, `kHopNeighbors` (if exposed in WASM), `cypher`, plus 4 WASM-only probes for `deleteNode`/`deleteEdge`/`importCypher`/`exportCypher`
+- Dispatcher: `GraphReasoner.create({ transport: 'wasm', ... })` selects this; auto-selection per Q5
+- New catalog rows for the 4 WASM-only capabilities, gated on `transport === 'wasm'`
+- If WASM Cypher fails the smoke-probe per Q7, file Issue #09 with the diagnostic verbatim
 
 ---
 

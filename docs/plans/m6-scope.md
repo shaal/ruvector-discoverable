@@ -194,6 +194,102 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M17 ratification + governance (CLAUDE.md, PRD §11, Issue #08, reprobe v0.4)
+
+User ratified all 7 M17 open questions per my leans, AND directed
+that the SDK ↔ upstream relationship policy be formalized in
+documentation. Net deliverables this milestone:
+
+**1. New `CLAUDE.md` at repo root.** Codifies operating principles for
+future ship-tasks: mission (we don't control upstream; SDK surfaces
+RuVector's features), 4 hard rules + 4 soft rules on the upstream
+relationship, semver+upstream-snapshot versioning policy, and links to
+key reference points. This is the canonical "read this before starting
+a ship-task" doc going forward.
+
+**2. PRD §11 — SDK ↔ Upstream relationship policy.** New top-level
+section in `docs/plans/ruvector-sdk-prd.md` that formalizes:
+- Hard rules (never block on upstream, re-probe before relying on
+  prior-doc claims, trust observed > declared, diagnostic = bug-
+  report-evidence infrastructure)
+- Versioning policy: patch (SDK-only), minor (additive surface
+  changes including dormant→active flips), major (breaking SDK
+  change driven by upstream non-translatable break OR architectural
+  rewrite)
+- Response patterns by upstream-change type (additive / regression /
+  defect fix / breaking major)
+- What consumers see (`getValueReport()` always names observed
+  upstream-package versions; SDK never silently degrades)
+- What the policy explicitly does NOT do (we don't fix upstream;
+  we don't track every release the day it lands; SDK API stability
+  not promised across upstream majors)
+
+**3. Issue #08 filed standalone** at
+`docs/upstream-issues/08-server-cluster-broken-publish.md`. Same defect
+class as #02; different packages (`@ruvector/server@0.1.0`,
+`@ruvector/cluster@0.1.0`). Both ship `package.json + README.md` only
+despite declaring `main: "index.js"` and `bin`. Total paste-ready
+upstream issues now: **8 (#01–#08)**. Issues README updated.
+
+**4. `reprobe.mjs` v0.4 ships.** Extended from 22 npm + 1 CLI to
+**31 npm + 1 CLI**. Added 9 transport-relevant rows per Q3 ratification:
+- `@ruvector/graph-wasm` (M17.1 target)
+- `@ruvector/ruvllm-wasm` (M17.2 target)
+- `@ruvector/rvf-wasm`, `@ruvector/ruqu-wasm`, `@ruvector/ospipe-wasm`
+- `@ruvector/router` (stealth-published; v0.3 candidate)
+- `@ruvector/server`, `@ruvector/cluster` (Issue #08 anchor)
+- `@ruvector/rvf-mcp-server` (AgentFramework Phase-1B candidate)
+
+**New `published-broken` expectation type**. Phase-2 of the npm probe
+fetches `npm view --json` and inspects `dist.fileCount`; broken-publish
+packages (Issue #02 / #08 pattern) ship with fileCount=2 (just
+package.json + README) when `main` is declared. Drift fires in either
+direction: fixed (`broken@x.y.z` → `published@x.y.z` = upstream
+republished cleanly, wire transport) or un-published.
+
+**5. M17 scope doc updated** to reflect ratification — all 7 open
+questions marked ✓ with binding implications for M17.1 spelled out.
+Header status changes from "Scoping" to "Ratified."
+
+**Drift-by-inversion verified during ratification ship-task** in 2 ways:
+
+(a) Initial broken-publish heuristic used `unpackedSize < 5000` —
+failed to flag `@ruvector/server` because its README is 6622B. Caught
+in the first reprobe run (rows came back classified as plain
+`published`, contradicting the expected `published-broken`). Fixed to
+use `dist.fileCount <= 2` after live-probing the npm metadata for
+both `@ruvector/server` (fileCount=2, broken) and `@ruvector/graph-wasm`
+(fileCount=5, working). The fix made the heuristic correct on a 2-row
+sample of known broken vs known working.
+
+(b) Drift path verified by flipping `@ruvector/router`'s `expect`
+from `published` to `unpublished`; reprobe correctly detected drift
+and emitted exit=1 with the right action message (`Wire it
+(sdk-integration) OR update dormant reason; classification was
+wrong.`). Restored via Edit tool — sed-based restore via `mv -i`
+hit the interactive overwrite prompt, leaving the file in the drift
+state. **Lesson**: don't restore via `mv` from inside the Bash tool;
+use `Edit` for surgical reverts.
+
+**Net code/doc impact**: ~280 LOC of new doc (CLAUDE.md ~100 lines,
+PRD §11 ~70 lines, Issue #08 ~110 lines), plus ~50 LOC reprobe.mjs
+(9 new rows + published-broken probe phase + comparison logic +
+output formatting). M17 scope doc cleaned up + M6 journal entry
+prepended.
+
+**Project state after this milestone**:
+- 6 of 6 archetypes shipped
+- 3 of 3 CLI subcommands (recommend / doctor / audit)
+- 8 paste-ready upstream issues
+- v0.4 reprobe (31 npm + 1 CLI, drift-detected via 2 expected states)
+- v0.2 polish closed (LICENSE, README Status callout, audit
+  --workload/--strict, recommend --local-sdk-path)
+- v1.0 SDK product narrative complete
+- M17 ratified; M17.1 (`WasmGraphBackend`) is the next ship-task.
+
+`docs/upstream-issues/README.md` references updated to include #08
+and bump the "M6 → M14" range to "M6 → M17."
+
 ## Update — M17 scoping (multi-transport backend; WASM real, HTTP broken-published)
 
 `docs/plans/m17-scope.md` filed. Live-probed 8 transport candidates against
