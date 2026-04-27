@@ -194,6 +194,12 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M12.5 (probe-diagnostic loop closed)
+
+`packages/sdk/src/backends/native-ruvllm.ts` updated: the `queryConfidenceBounded` and `routeDecisionShape` detail strings (and the M12.1 comment block above them) now reference `upstream-issues/06` and name the JS-wrapper case-rename mismatch — replacing M12.1's wrong "native struct under-populated" attribution. Diagnostic-only change; same probe assertion logic, same `broken` status, same enumerated missing fields. Closes the explicit "will be updated in a follow-up" loop named in the M12.4 entry below and in Issue #06's "Detection by an integrating SDK" section.
+
+The four other demos (graph-reasoner, knowledge-base, time-series-memory, auto-embed) showed only M8.2 nondeterminism in the M8.2-protocol diff — confirming this was indeed a scope-tight diagnostic-only change.
+
 ## Update — M12.4 (Issue #06 authored; M12.1's root-cause theory was wrong)
 
 `docs/upstream-issues/06-query-route-under-populated-fields.md` filed. Lifted from #05's "Related findings" section and expanded — but during the lift, **a fresh probe of the native-layer binding overturned M12.1's first-pass theory**. M12.1 attributed the missing-field defect to "native struct under-populated"; the actual root cause is the JS-layer wrapper renaming snake_case to camelCase that the native binding already provides.

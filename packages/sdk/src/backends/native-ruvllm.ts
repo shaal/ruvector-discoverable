@@ -357,12 +357,15 @@ export class NativeRuvllmBackend {
       if (conf < 0 || conf > 1) {
         return { status: 'broken', detail: `confidence=${conf.toFixed(4)} out of [0,1]` };
       }
-      // M12.1 finding: the JS-layer wrapper claims to return 6 fields but the
-      // upstream native QueryResponse struct only populates 3 (text, confidence,
-      // model). The wrapper passes `result.context_size` etc. through, getting
-      // `undefined`. Probe enumerates which fields are missing for actionable
-      // diagnostic. This is a separate upstream defect from the model-loading
-      // issue (#05) — should be filed as #06.
+      // M12.4 corrected attribution (was M12.1): the JS-layer wrapper claims
+      // to return 6 fields and only delivers 3. M12.1 attributed this to
+      // "native struct under-populated" — wrong. M12.4 probed the platform
+      // binding directly and found the native side returns ALL six fields
+      // populated in camelCase. The defect is in the umbrella's wrapper
+      // (`engine.js`) which renames snake_case → camelCase that the native
+      // binding has already done: every `result.context_size` lookup hits
+      // `undefined`. See docs/upstream-issues/06-query-route-under-populated-fields.md.
+      // Probe enumerates which fields are undefined for actionable diagnostic.
       const missing: string[] = [];
       if (typeof r.text !== 'string') missing.push(`text(${typeof r.text})`);
       if (typeof r.model !== 'string') missing.push(`model(${typeof r.model})`);
@@ -372,7 +375,7 @@ export class NativeRuvllmBackend {
       if (missing.length > 0) {
         return {
           status: 'broken',
-          detail: `confidence ok (${conf.toFixed(3)}) but missing/wrong-type fields: ${missing.join(', ')}. Native QueryResponse struct under-populated — separate from upstream-issues/05.`,
+          detail: `confidence ok (${conf.toFixed(3)}) but missing/wrong-type fields: ${missing.join(', ')}. JS-wrapper case-rename mismatch: snake_case lookups against camelCase native return — see upstream-issues/06.`,
         };
       }
       return { status: 'ok', detail: `confidence=${conf.toFixed(3)}; model='${r.model}'; ${r.text.length}-char text; latency=${r.latencyMs.toFixed(2)}ms` };
@@ -403,7 +406,7 @@ export class NativeRuvllmBackend {
       if (missing.length > 0) {
         return {
           status: 'broken',
-          detail: `RoutingDecision missing/wrong-type fields: ${missing.join(', ')}. Native struct under-populated (same defect as queryConfidenceBounded).`,
+          detail: `RoutingDecision missing/wrong-type fields: ${missing.join(', ')}. JS-wrapper case-rename mismatch (same defect as queryConfidenceBounded) — see upstream-issues/06.`,
         };
       }
       return { status: 'ok', detail: `model='${r.model}', T=${r.temperature.toFixed(2)}, topP=${r.topP.toFixed(2)}, conf=${r.confidence.toFixed(2)}` };
