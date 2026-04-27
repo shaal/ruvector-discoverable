@@ -194,6 +194,38 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M11.1 outcome (LocalLLM Phase 1: embed + similarity active)
+
+Fourth archetype shipped with a real backend. Wiring `@ruvector/ruvllm` via `NativeRuvllmBackend`. Phase 1 surfaces `embed` and `similarity` only; `generate`/`stream` throw `NotImplementedError` until Phase 2 wires a real model file.
+
+3-probe tier-3 health check passes:
+- `embedDeterministic ok dim=768, identical across calls`
+- `embedUnitNorm ok norm = 1.0000 (unit-normalized)`
+- `similarityMonotonic ok sim(cat,dog)=0.9998 > sim(cat,banana)=0.9821`
+
+The `similarityMonotonic` assertion is exactly what M11 scoping anticipated — a strong-signal pair (cat/dog vs cat/banana) reliably distinguishes a working semantic-similarity binding from a stub.
+
+**Project-wide value-report breakdown across the 4 working archetypes**:
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| GraphReasoner | 3 | 5 | 4 | 1 (cypher) | 0 | 0 |
+| KnowledgeBase | 6 | 3 | 3 | 0 | 0 | 0 |
+| TimeSeriesMemory | 5 | 4 | 4 | 0 | 0 | 0 |
+| LocalLLM | 3 | 7 | 3 | 0 | 0 | 4 |
+| **Total** | **17** | **19** | **14** | **1** | **0** | **4** |
+
+**`design-deferred` is non-zero for the first time**. 4 entries in LocalLLM (generate, streaming, feedback, localMemory). M9.1 reserved this category for "intentional Phase-N deferrals"; LocalLLM is the first archetype to actually use it. The classification is now operating in 3 of its 4 modes.
+
+**`sdk-integration` remains 0**. Every dormant capability across all 4 archetypes is either gated on someone else (15) or deliberately Phase 2 (4).
+
+**Three real bugs found in this milestone**, each by running:
+1. Cross-realm `instanceof Float32Array` fails when the typed array comes from a different module realm — fixed with a duck-type `asFloat32Array` helper in `native-ruvllm.ts`.
+2. The umbrella's `RuvLLM.embed()` returns a plain `number[]`, not a Float32Array. Its TypeScript type says Float32Array. Real upstream contract violation; minor candidate to add to Issue #02.
+3. The binding rejects `embed(string[])` despite the JS class declaring batch support — `StringExpected` error. SDK now dispatches per-string in `embedBatch`.
+
+**Cross-archetype propagation deferred to M11.2**. With `llm.embed()` working, KB / TSM / GR could drop their "user supplies pre-computed embeddings" caveats. That's the largest single ergonomic upgrade still available — but it's a *cross-archetype coordination* task best done after Phase 1 has settled.
+
 ## Update — M11 scoping (LocalLLM; my M6 claim about ruvllm was wrong)
 
 `docs/plans/m11-scope.md` is the LocalLLM scoping report. The headline correction:
