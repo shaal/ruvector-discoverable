@@ -194,6 +194,26 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M15 scoping (recommend / doctor / audit CLI; PRD §5.5)
+
+`docs/plans/m15-scope.md` filed plus `docs/upstream-issues/07-rvagent-family-unpublished.md` as a parallel quick win. With the archetype frontier closed (M14.1), the SDK's center-of-gravity shifts to user-discovery — PRD §5.5's CLI is the next milestone.
+
+**Headline finding**: the entire CLI is **pure-SDK code with zero upstream dependencies**. `doctor` is a thin presentation layer over the existing `healthCheck()` + `getValueReport()` infrastructure (~80-100 LOC). `recommend` is a 5-question prompt flow + a 6-row workload→archetype mapping table. `audit` is the only opinionated piece (best-practice templates) — deferred to Phase-2.
+
+**Six canonical workloads → six archetypes**, with the dormant `[blocker]` quoted verbatim in the "Skip" output. Each recommendation is auditable from the catalog itself; no editorial freelancing. The PRD §5.5 example (`KnowledgeBase + DiskANN + ColBERT + Graph RAG`) is **aspirational** per the live reprobe — DiskANN and ColBERT are still upstream-binding-blocked. Phase-1A's recommend output explicitly lists them in the Skips column with `[upstream-binding]` reasons rather than recommending them.
+
+**`doctor` ships first** — half-session of CLI glue. The SDK already produces every input it needs. Loads a user's `ruvector.config.ts`, awaits `healthCheck()` + `getValueReport()`, formats the output. **No new SDK introspection code.** Highest user value (single command shows "what's working in your config") with lowest design risk.
+
+**Recommend pipes the M9.1 four-blocker classification into a new layer.** The classification work (M9.1) has now paid off on four layers: dormant lists in demos (M9.1), upstream-issue authoring (M10.2 / M12.1 / M12.4), SDK probe diagnostics (M12.5), and now CLI surfacing (M15). One classification investment; four user-visible payoffs.
+
+**Issue #07 authored** at `docs/upstream-issues/07-rvagent-family-unpublished.md`. Lifts the M14 scoping evidence verbatim (0 of 9 named, 0 of 12 across alternatives). Updates the upstream-issues README — total 7 paste-ready issues now (#01–07), mostly clustered around `@ruvector/ruvllm` (#02 partial / #05 / #06) and `@ruvector/rvagent-*` (#07).
+
+**`reprobe.mjs` v0.3 work-item**: extend the `PROBES` table with the 9 rvagent-* names (Issue #07 names them with `expect: 'unpublished'` annotations ready to paste). When upstream publishes any one, the next reprobe surfaces the drift and the integrating SDK gets actionable reclassification guidance for AgentFramework's `mcp` / `a2a` / `acp` rows.
+
+**5 open questions for ratification** in m15-scope.md §6: prompt library (lean: `node:readline`), config shape (lean: TS module), workload mapping (lean: data-only file), config loading (lean: `import()` with `tsx` fallback), Issue #07 (already authored standalone — lean confirmed).
+
+**Project state unchanged from M14.1**: 31 active SDK capabilities / 34 dormant; 6 of 6 archetypes shipped. The CLI doesn't add new SDK capabilities — it surfaces existing ones at a new entry point.
+
 ## Update — M14.1 outcome (AgentFramework Phase-1A — sixth archetype lands; archetype frontier closes)
 
 `AgentFramework` shipped end-to-end. **All 6 headline archetypes now implemented**: KB / TSM / GR / LocalLLM / AgentMemory / AgentFramework. The M5 surface freeze has fully thawed; the project's headline-archetype frontier closes.
