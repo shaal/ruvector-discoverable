@@ -26,7 +26,7 @@
 // edit the relevant table below. Each entry must point at a milestone or
 // scoping doc that justifies its expected state.
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -146,6 +146,63 @@ const CLI_PROBES = [
 
 const PROBE_TIMEOUT_MS = 15_000;
 const CLI_PROBE_TIMEOUT_MS = 10_000;
+
+// =====================================================================
+// BINDING_METHOD_PROBES — runtime behavior probes (M22 / v0.5)
+// =====================================================================
+//
+// Each probe is a subprocess-isolated .mjs script that exercises a
+// specific upstream binding method. The script exits 0 when the
+// expected (defective) state holds and 1 (or otherwise non-zero) when
+// the behavior changed — typically meaning upstream fixed the defect
+// and the SDK should reclassify.
+//
+// Issue #11 specifically requires SIGKILL-on-timeout because the bug is
+// a sync-NAPI infinite loop that ignores SIGTERM/setTimeout. Probes
+// with `timeoutIsExpected: true` treat a timeout-kill as the
+// expected outcome.
+//
+// Adding a new probe:
+//   1. Drop a script at tools/reprobe-bindings/probes/NN-name.mjs
+//   2. Add an entry below
+//   3. Run reprobe; verify it shows "✓ expected" (or "✓ expected-hang")
+const BINDING_METHOD_PROBES = [
+  {
+    name: 'graph-node-cypher-stub',
+    issue: '#01',
+    scriptPath: 'tools/reprobe-bindings/probes/01-graph-node-cypher-stub.mjs',
+    timeoutMs: 10_000,
+    timeoutIsExpected: false,
+    notes: 'Cypher engine stub in @ruvector/graph-node@2.0.x. Drift = upstream wired Cypher; flip GraphReasoner.cypher dormant→active.',
+  },
+  {
+    name: 'graph-wasm-cypher-stub',
+    issue: '#09',
+    scriptPath: 'tools/reprobe-bindings/probes/09-graph-wasm-cypher-stub.mjs',
+    timeoutMs: 10_000,
+    timeoutIsExpected: false,
+    notes: 'Cypher engine stub in @ruvector/graph-wasm@2.0.x (same defect class as #01). Drift = WasmGraphBackend cypher works.',
+  },
+  {
+    name: 'ruvllm-wasm-no-inference',
+    issue: '#10',
+    scriptPath: 'tools/reprobe-bindings/probes/10-ruvllm-wasm-no-inference.mjs',
+    timeoutMs: 10_000,
+    timeoutIsExpected: false,
+    notes: 'RuvLLMWasm has no embed/similarity/generate/query/route. Drift = upstream shipped inference; wire WasmLocalLLMBackend.',
+  },
+  {
+    name: 'router-delete-deadlock',
+    issue: '#11',
+    scriptPath: 'tools/reprobe-bindings/probes/11-router-delete-deadlock.mjs',
+    // Short timeout — Issue #11 is a sync infinite loop. 3s is plenty;
+    // no real `delete` on a 1-node DB takes anywhere near that.
+    timeoutMs: 3_000,
+    timeoutIsExpected: true,
+    notes: '@ruvector/router@0.1.30 VectorDb.delete(<existing-id>) hangs. Probe hangs as expected; SIGKILL after timeout. Drift = exit-before-timeout = bug fixed.',
+  },
+];
+const BINDING_METHOD_TIMEOUT_DEFAULT_MS = 10_000;
 
 // =====================================================================
 // NPM probe
@@ -289,11 +346,78 @@ async function probeCli(entry) {
 }
 
 // =====================================================================
+// Binding-method probe (M22 / v0.5) — subprocess-isolated, SIGKILL-safe
+// =====================================================================
+//
+// Spawns the probe script in a child Node process, captures stdout +
+// exit, and enforces a hard timeout via setTimeout-then-kill('SIGKILL').
+// SIGKILL is required because Issue #11 (and any future upstream bug
+// of the same class) is a sync NAPI infinite loop that ignores SIGTERM.
+//
+// Returns one of:
+//   { status: 'expected',      detail }  — probe exit 0; bug present
+//   { status: 'expected-hang', detail }  — killed by timeout AND
+//                                            timeoutIsExpected=true
+//   { status: 'drift',         detail }  — exit !=0, OR killed when
+//                                            timeoutIsExpected=false
+//   { status: 'error',         detail }  — script could not run (missing
+//                                            file, spawn error)
+async function probeBindingMethod(entry) {
+  const scriptAbs = join(REPO_ROOT, entry.scriptPath);
+  if (!existsSync(scriptAbs)) {
+    return { status: 'error', detail: `probe script not found: ${entry.scriptPath}` };
+  }
+  const timeoutMs = entry.timeoutMs ?? BINDING_METHOD_TIMEOUT_DEFAULT_MS;
+
+  return new Promise((resolveResult) => {
+    const child = spawn(process.execPath, [scriptAbs], {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      try { child.kill('SIGKILL'); } catch {/* ignore */}
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.once('error', (err) => {
+      clearTimeout(timer);
+      resolveResult({ status: 'error', detail: `spawn error: ${err.message}` });
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      const lastLine = stdout.trim().split('\n').filter(Boolean).pop() ?? '';
+      if (killed) {
+        if (entry.timeoutIsExpected) {
+          resolveResult({ status: 'expected-hang', detail: `timed out after ${timeoutMs}ms (expected per Issue ${entry.issue})` });
+        } else {
+          resolveResult({
+            status: 'drift',
+            detail: `unexpected timeout after ${timeoutMs}ms (probe should not hang). Last stdout: ${lastLine || '(none)'}`,
+          });
+        }
+        return;
+      }
+      if (code === 0) {
+        resolveResult({ status: 'expected', detail: lastLine || 'exit 0' });
+        return;
+      }
+      // Non-zero exit. Drift: behavior changed, classification was wrong.
+      const detail = lastLine || stderr.trim().split('\n').filter(Boolean).pop() || `exit ${code} signal ${signal ?? '(none)'}`;
+      resolveResult({ status: 'drift', detail });
+    });
+  });
+}
+
+// =====================================================================
 // Main
 // =====================================================================
-console.log('# Upstream re-probe (M11.3 v0.4 — M17 ratification: +9 transport rows)\n');
+console.log('# Upstream re-probe (M11.3 v0.5 — M22: +binding-method probes)\n');
 const startedAt = new Date().toISOString();
-console.log(`Probed ${PROBES.length} npm packages + ${CLI_PROBES.length} CLI binaries at ${startedAt}.\n`);
+console.log(`Probed ${PROBES.length} npm packages + ${CLI_PROBES.length} CLI binaries + ${BINDING_METHOD_PROBES.length} binding-method probes at ${startedAt}.\n`);
 
 console.log('## NPM publication status\n');
 const results = await Promise.all(PROBES.map(async (p) => ({ ...p, observed: await probe(p.pkg, p.expect) })));
@@ -335,8 +459,33 @@ const cliDrifts = cliResults.filter((r) => r.observed.status === 'drift');
 const cliBinaryMissing = cliResults.filter((r) => r.observed.status === 'binary-not-found');
 const cliErrors = cliResults.filter((r) => r.observed.status === 'error' || r.observed.status === 'timeout');
 
-const totalDrifts = npmDrifts.length + cliDrifts.length;
-const totalErrors = npmErrors.length + cliErrors.length;
+console.log('\n## Binding-method behavior probes (M22 — runtime defects)\n');
+console.log('Subprocess-isolated probes that exercise upstream binding methods directly. Each ' +
+  'expects the documented defect to still be present (exit 0); a non-zero exit (or unexpected ' +
+  'timeout) signals upstream behavior changed — likely a fix worth reclassifying.\n');
+const bmResults = [];
+for (const e of BINDING_METHOD_PROBES) {
+  // Run sequentially. Probe #11 SIGKILLs its child after timeout; running
+  // probes in parallel could starve the OS of subprocess slots when the
+  // hung child is still being reaped.
+  bmResults.push({ ...e, observed: await probeBindingMethod(e) });
+}
+console.log('| Status | Probe | Issue | Outcome |');
+console.log('|---|---|---|---|');
+for (const r of bmResults) {
+  const o = r.observed;
+  const emoji = (o.status === 'expected' || o.status === 'expected-hang') ? '✓'
+    : o.status === 'error' ? '!'
+      : '⚠';
+  const detail = (o.detail ?? '').replace(/\|/g, '\\|').slice(0, 110);
+  console.log(`| ${emoji} | \`${r.name}\` | ${r.issue} | ${detail} |`);
+}
+const bmDrifts = bmResults.filter((r) => r.observed.status === 'drift');
+const bmErrors = bmResults.filter((r) => r.observed.status === 'error');
+const bmExpected = bmResults.filter((r) => r.observed.status === 'expected' || r.observed.status === 'expected-hang');
+
+const totalDrifts = npmDrifts.length + cliDrifts.length + bmDrifts.length;
+const totalErrors = npmErrors.length + cliErrors.length + bmErrors.length;
 
 if (cliBinaryMissing.length > 0) {
   console.log(`\n**${cliBinaryMissing.length} CLI binary(ies) not found** — probably an environment without those packages installed.`);
@@ -348,7 +497,7 @@ if (totalErrors > 0) {
 }
 
 if (totalDrifts === 0) {
-  console.log(`\n**No drift.** ${PROBES.length - npmErrors.length}/${PROBES.length} npm + ${cliResults.length - cliErrors.length - cliBinaryMissing.length}/${cliResults.length} CLI match expected.`);
+  console.log(`\n**No drift.** ${PROBES.length - npmErrors.length}/${PROBES.length} npm + ${cliResults.length - cliErrors.length - cliBinaryMissing.length}/${cliResults.length} CLI + ${bmExpected.length}/${BINDING_METHOD_PROBES.length} binding-method probes match expected.`);
   console.log('Suggested cadence: re-run at every milestone close, or quarterly.');
   process.exit(totalErrors > 0 ? 1 : 0);
 }
@@ -385,6 +534,12 @@ for (const d of cliDrifts) {
     console.log(`  - ${dd.kind}: ${dd.pattern}  → ${action}`);
   }
   console.log(`  - Affected: ${d.notes}`);
+}
+for (const d of bmDrifts) {
+  console.log(`- binding-method: \`${d.name}\` (Issue ${d.issue})`);
+  console.log(`  - Detail: ${d.observed.detail}`);
+  console.log(`  - Affected: ${d.notes}`);
+  console.log(`  - Action: Upstream behavior changed — verify, then update the SDK's catalog/probe classification accordingly. Same M6.2 self-correcting flow.`);
 }
 console.log('```');
 process.exit(1);

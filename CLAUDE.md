@@ -92,7 +92,7 @@ The SDK's `getValueReport()` always names the **observed upstream-package versio
 | [`docs/plans/m6-scope.md`](docs/plans/m6-scope.md) | Running journal of every milestone outcome. Newest at top. Read bottom-up to learn the project's history; top-down to catch up since last session. |
 | [`docs/plans/m11-scope.md`](docs/plans/m11-scope.md) → [`m17-scope.md`](docs/plans/m17-scope.md) | Per-milestone scoping passes (LocalLLM / Phase 2 / AgentMemory / AgentFramework / CLI / Transports). Each ends with ratified open questions whose answers shaped the implementation milestones. |
 | [`docs/upstream-issues/`](docs/upstream-issues/) | Paste-ready bug reports for upstream. 8 issues filed as of M17-ratification. |
-| [`tools/reprobe-bindings/reprobe.mjs`](tools/reprobe-bindings/reprobe.mjs) | Ground-truth on upstream surface contracts. Re-runnable; CI-gateable. v0.4 tracks 31 npm + 1 CLI. |
+| [`tools/reprobe-bindings/reprobe.mjs`](tools/reprobe-bindings/reprobe.mjs) | Ground-truth on upstream surface contracts. Re-runnable; CI-gateable. v0.5 tracks 31 npm + 1 CLI + 4 binding-method probes (subprocess-isolated, SIGKILL-on-timeout for hung NAPI calls per Issue #11). |
 | [`packages/sdk/src/`](packages/sdk/src/) | The SDK itself. Six archetypes under `archetypes/`; backends under `backends/`; CLI under `cli/`; cross-cutting under `core/`. |
 | [`packages/sdk/README.md`](packages/sdk/README.md) | Top-of-funnel SDK doc. Status callout near top names current pre-publish state. |
 

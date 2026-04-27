@@ -194,6 +194,103 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M22 outcome (reprobe v0.5: subprocess-isolated binding-method probes)
+
+The diagnostic-infrastructure-as-bug-report-evidence-infrastructure soft
+rule reaches its full payoff. What the SDK's `healthCheck()` observes
+per-archetype, reprobe now observes per-process per-CI-run. When upstream
+fixes any of the 4 probed defects, reprobe surfaces drift and recommends
+reclassification — same M6.2 self-correcting pattern that's been
+load-bearing since M6.
+
+**Implementation** (~190 LOC: ~80 LOC reprobe.mjs additions + 4 probe
+scripts at ~30 LOC each):
+
+- `tools/reprobe-bindings/probes/01-graph-node-cypher-stub.mjs` — Issue #01
+- `tools/reprobe-bindings/probes/09-graph-wasm-cypher-stub.mjs` — Issue #09
+- `tools/reprobe-bindings/probes/10-ruvllm-wasm-no-inference.mjs` — Issue #10
+- `tools/reprobe-bindings/probes/11-router-delete-deadlock.mjs` — Issue #11
+- New `BINDING_METHOD_PROBES` array in reprobe.mjs (third probe category
+  after PROBES + CLI_PROBES); per-entry: `{name, issue, scriptPath,
+  timeoutMs, timeoutIsExpected, notes}`.
+- New `probeBindingMethod(entry)` runner: spawns child Node process,
+  captures stdout/exit, enforces hard timeout via `setTimeout` →
+  `child.kill('SIGKILL')`. SIGKILL is required because Issue #11 is a
+  sync NAPI infinite loop that ignores SIGTERM/setTimeout in the child.
+- Banner bumped to "M11.3 v0.5 — M22: +binding-method probes".
+- Drift output extended with binding-method-specific action message:
+  "Upstream behavior changed — verify, then update the SDK's catalog/
+  probe classification accordingly."
+
+**Probe exit-code convention** (inverted from intuition): `exit 0` =
+expected-state-holds (the bug is still present, classification is still
+correct); `exit 1` = drifted (probably good news — upstream may have
+fixed it). For Issue #11 specifically, `expected-state-holds` means
+"probe was killed by timeout because delete() never returned" —
+`timeoutIsExpected: true` flag on that entry treats the timeout as the
+expected outcome.
+
+**Module resolution**: probe scripts live at
+`tools/reprobe-bindings/probes/` but `@ruvector/*` deps live at
+`packages/sdk/node_modules/`. Each probe uses
+`createRequire(REPO_ROOT/packages/sdk/package.json)` + `pathToFileURL` +
+dynamic `import()` to resolve regardless of cwd. SDK-independent — probes
+catch upstream surface changes even if the SDK refactors.
+
+**Drift-by-inversion verified**: temporarily flipped probe #11's
+`timeoutIsExpected` from `true` to `false`. Reprobe correctly classified
+the probe as drift (exit=1, "⚠ Drift detected (1)", binding-method-
+specific drift block printed with the right action message). Restored
+cleanly.
+
+**Subprocess isolation verified**: ran reprobe; no orphan node
+processes remain. SIGKILL successfully reaps the hung child via the
+`'close'` event handler. Total runtime ~7s (probe #11's 3s timeout is
+the longest leg; others complete in <2s combined).
+
+**Caught live**:
+- Initial probes used `import('@ruvector/...')` directly. Failed with
+  `ERR_MODULE_NOT_FOUND` because Node ESM resolution starts from the
+  module's URL, not cwd, and `tools/reprobe-bindings/probes/` has no
+  reachable `node_modules` ancestor with the packages. Fixed via
+  `createRequire` rooted at `packages/sdk/package.json` →
+  `require.resolve('@ruvector/...')` → dynamic-import the resolved path.
+  Lesson: ESM dynamic imports of npm packages from utility scripts
+  outside the package's home directory always need this dance.
+
+**v0.6 work-items captured inline**:
+- Add an Issue #03 probe (dimension singleton in `@ruvector/core`) —
+  needs sequential VectorDb constructions at different dims; subprocess
+  isolation already supports this, just needs a script.
+- Tune probe #11's timeout based on CI baseline (currently 3s; may want
+  to bump to 5s for slow runners).
+- Probe-script orphan-process metric over a long CI loop — verify SIGKILL
+  consistently reaps; if not, add a defensive `child.unref()` + per-run
+  process-list audit.
+
+**Project state after M22**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage: 'router'`
+- 11 paste-ready upstream issues (#01-#11)
+- **`reprobe.mjs` v0.5**: 31 npm + 1 CLI + 4 binding-method probes,
+  subprocess-isolated and SIGKILL-safe; clean exit 0 today, exit 1 +
+  paste-ready drift block when upstream fixes any of #01/#09/#10/#11
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+
+**Next ship-task candidates**:
+- **Issue #03 binding-method probe**: extend reprobe to detect when
+  `@ruvector/core` fixes its dimension-singleton bug. Same subprocess-
+  isolated pattern.
+- **Cross-archetype-DI scoping doc**: scope additional DI patterns
+  now that v0.3 invariants are ratified.
+- **AgentMemory text persistence to backend**: M21 stores text in-process;
+  v0.5 could persist via the backend's metadata channel.
+
+`docs/upstream-issues/README.md` references unchanged (M22 surfaced
+no new upstream issues — M22 is upstream-tracking infrastructure for
+the existing 11 issues).
+
 ## Update — M21 outcome (AgentMemory text storage v0.4; M20 demo paper-cut closed)
 
 The only user-visible paper-cut from the M20 v0.3 demo is closed.
