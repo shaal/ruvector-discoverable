@@ -53,9 +53,14 @@ export type {
   Node,
   Edge,
   Hyperedge,
+  NodeResult,
+  EdgeResult,
   CypherResult,
-  PageRankResult,
-  CommunityDetectionResult,
+  GraphStats,
+  HyperedgeSearchOptions,
+  HyperedgeSearchResult,
+  KHopOptions,
+  GraphChangeListener,
 } from './archetypes/GraphReasoner.js';
 
 export { TimeSeriesMemory } from './archetypes/TimeSeriesMemory.js';

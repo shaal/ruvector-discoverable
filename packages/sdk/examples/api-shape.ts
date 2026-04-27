@@ -77,14 +77,38 @@ async function exerciseAgentMemory(): Promise<void> {
 
 async function exerciseGraphReasoner(): Promise<void> {
   const g: GraphReasoner = await pending();
-  await GraphReasoner.create({ capabilities: { cypher: true, sublinearSolvers: 'auto' } });
-  await g.addNodes([{ id: 'a', labels: ['User'] }, { id: 'b', labels: ['Doc'] }]);
-  await g.addEdges([{ from: 'a', to: 'b', type: 'OWNS' }]);
-  await g.addHyperedges([{ nodes: ['a', 'b', 'c'], type: 'GROUP' }]);
+  await GraphReasoner.create({ dimensions: 16, distanceMetric: 'Cosine' });
+
+  // M6 v0.1: nodes/edges/hyperedges require explicit embeddings. v0.2 will
+  // accept an embedder config that derives them from a `text` field.
+  const dummy = (): Float32Array => new Float32Array(16);
+  await g.addNodes([
+    { id: 'a', embedding: dummy(), labels: ['User'], properties: { name: 'Alice' } },
+    { id: 'b', embedding: dummy(), labels: ['Doc'] },
+  ]);
+  await g.addEdges([{ from: 'a', to: 'b', description: 'OWNS', embedding: dummy() }]);
+  await g.addHyperedges([{ nodes: ['a', 'b', 'c'], description: 'GROUP', embedding: dummy() }]);
+  await g.addBatch({
+    nodes: [{ id: 'c', embedding: dummy(), labels: ['Topic'] }],
+    edges: [{ from: 'a', to: 'c', description: 'INTERESTED_IN', embedding: dummy() }],
+  });
+
   const cy: CypherResult = await g.cypher('MATCH (u:User)-[:OWNS]->(d:Doc) RETURN u, d');
-  void cy.rows[0];
-  void (await g.pageRank({ topK: 100 })).scores[0]?.score;
-  void (await g.communities({ resolution: 1.0 })).communities[0]?.size;
+  void cy.nodes[0]?.id;
+  void cy.edges[0]?.edgeType;
+  void cy.stats?.totalNodes;
+
+  const neighbors = await g.kHopNeighbors({ startNode: 'a', hops: 2 });
+  void neighbors[0];
+
+  const hits = await g.searchHyperedges({ embedding: dummy(), k: 5 });
+  void hits[0]?.score;
+
+  void (await g.stats()).avgDegree;
+
+  const unsub = g.subscribe((_change: unknown) => {});
+  unsub();
+
   await g.close();
 }
 

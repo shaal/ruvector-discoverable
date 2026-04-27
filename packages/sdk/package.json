@@ -24,9 +24,14 @@
     "check": "tsc --noEmit",
     "verify": "tsc --noEmit && tsc --noEmit -p examples/tsconfig.json"
   },
-  "engines": { "node": ">= 18" },
+  "engines": {
+    "node": ">= 18"
+  },
   "devDependencies": {
     "typescript": "^5.5.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@ruvector/graph-node": "^2.0.3"
+  }
 }

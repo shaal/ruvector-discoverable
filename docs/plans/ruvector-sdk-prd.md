@@ -475,7 +475,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | M3 | Phase 2 — `syn`-based cataloger v0.1 | done 2026-04-26 | M2 | 1 session |
 | M4 | Archetype ratification (final list, mapped to L3 items) | done 2026-04-26 (v0.1) | M3 | 1 session |
 | M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | done 2026-04-26 (v0.1) | M4 | 1 session |
-| M6 | Reference example for one archetype (`KnowledgeBase`) | TBD | M5 | 1 week |
+| M6 | Reference example for one archetype (GraphReasoner) | done 2026-04-26 (v0.1) | M5 | 1 session |
 | M7 | SDK v0.1 — three backends, one archetype | TBD | M6 | 2 weeks |
 | M8 | SDK v0.2 — three archetypes, `getValueReport`, `.explain` | TBD | M7 | 3 weeks |
 | M9 | SDK v0.3 — `doctor` / `recommend` CLI, capability registry | TBD | M8 | 2 weeks |
