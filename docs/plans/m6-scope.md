@@ -194,6 +194,104 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M17 scoping (multi-transport backend; WASM real, HTTP broken-published)
+
+`docs/plans/m17-scope.md` filed. Live-probed 8 transport candidates against
+upstream-published reality. Headline: **WASM is real and richer than NAPI
+in places; HTTP is gated by a broken-publish defect (Issue #08 candidate).**
+
+**Reprobe (M16 v0.2 baseline)**: 0 drift across 22 npm + 1 CLI. Clean
+starting point for the M17 surface investigation.
+
+**Eight transport-candidate npm probes** (none currently in `reprobe.mjs`):
+
+| Status | Package | Probe finding |
+|---|---|---|
+| ✓ | `@ruvector/graph-wasm@2.0.2` | full GraphDB live in Node (with explicit init bytes); **richer than `@ruvector/graph-node`** — adds delete/import/export Cypher methods |
+| ✓ | `@ruvector/ruvllm-wasm@2.0.0` | 45 exports vs NAPI's 14; RuvLLMWasm + MicroLora + KvCache + Sona + ChatTemplate + ParallelInference all live |
+| ✓ | `@ruvector/router@0.1.30` | **stealth find** — published VectorDb with insert/search/delete/getAllIds; could enable a publish-ready KB backend independent of `@ruvector/core` |
+| ✓ | `@ruvector/rvf-wasm`, `ruqu-wasm`, `ospipe-wasm`, `rvf-mcp-server` | published; not deep-probed (out of scope for M17 transport surface) |
+| ✗ | `@ruvector/server@0.1.0` | **broken-publish** — declares `main: index.js` + `bin: ./bin/ruvector-server` but ships only `package.json` + `README.md`. Same defect class as Issue #02. Issue #08 candidate. |
+| ✗ | `@ruvector/cluster@0.1.0` | broken-publish, same defect pattern |
+| ✗ | `@ruvector/ruvector-wasm`, `ruvector-wasm-unified`, `cognitum-gate-wasm` | unpublished (despite existing in `npm/packages/`) |
+
+**Three insights that change PRD §5.1's narrative**:
+
+1. **WASM is not the degraded fallback PRD §5.1 implied.** `graph-wasm`
+   exposes 4 capabilities (`deleteNode`/`deleteEdge`/`importCypher`/
+   `exportCypher`) the NAPI binding lacks. PRD §5.1 needs revision: WASM
+   is a peer transport, in some cases superset.
+
+2. **WASM works in pure Node, not just browser.** Default `init()` uses
+   `fetch` (browser-target wasm-bindgen), but `init({ module_or_path:
+   bytes })` with `require.resolve` byte-loading works cleanly. Adapter
+   owns this lifecycle; user code is identical across transports.
+
+3. **HTTP transport is gated on Issue #08, not on architecture work.**
+   The upstream `ruvector-server` Rust crate is real (axum REST API on
+   port 6333, routes for collections/health/points). The blocker is the
+   broken npm publication of `@ruvector/server@0.1.0`. Fixing the
+   publication unblocks HTTP; nothing about the SDK design needs to
+   change.
+
+**Recommendation: Path A — WASM-first**. M17.1 (`WasmGraphBackend`) +
+M17.2 (`WasmLocalLLMBackend`). HTTP deferred until Issue #08 lands or a
+build-from-Rust-crate decision is ratified. Path A reasons:
+- WASM has a working binding today; HTTP doesn't (without unilateral fixes
+  the SDK can't make).
+- Browser persona is a named PRD §3 adoption-driver only WASM serves.
+- 1 transport validates the abstraction before extending to 3.
+- 4 WASM-only graph capabilities are SDK-level value-add, not just transport
+  variety.
+- HTTP can be honestly named `dormant [upstream-bug]` in `getValueReport`
+  pending Issue #08 — same self-correcting-classification pattern the SDK
+  already uses 7 times.
+
+**Two parallel quick wins to file alongside M17 ratification**:
+- **Issue #08** — `@ruvector/server` + `@ruvector/cluster` broken-publish.
+  Lean: standalone (parallel to Issue #07's spin-off from #02 precedent).
+- **`reprobe.mjs` v0.4** — extend with 9 transport-relevant packages.
+  Current 22-pkg surface is blind to publication changes in the entire
+  transport story; v0.4 brings drift detection up to 31 npm packages.
+
+**Open questions for ratification** (7 total in m17-scope.md §6):
+Path A/B/C, Issue #08 standalone-vs-fold, reprobe v0.4 row list, init-
+lifecycle surface (hide-in-create vs explicit), backend-selection rule
+(explicit-first auto-fallback), `@ruvector/router` stealth-publication
+(M17 vs v0.3 separate workstream), WASM Cypher stub (assume vs probe).
+
+**M11 / M12 follow-up confirmed live**: M11 noted `@ruvector/ruvllm-wasm`
+exists but didn't probe it; M17 ratifies the package is real and exposes
+**3.2× the NAPI surface** (45 exports vs 14). **Disproved live during
+scoping**: the optimistic "WASM may be the Issue #05 workaround" framing
+was killed by reading `RuvLLMWasm.initializeWithConfig`'s .d.ts —
+it takes `KvCacheConfigWasm`, NOT a model file. The model-loading defect
+may still be resolved elsewhere in the 45 exports (MicroLora? SonaInstant?
+ParallelInference?) but the closest-named method does **not** fix it.
+Net: M17.2 still warrants a full surface diff, but its rationale is
+"45 exports vs 14 — find what NAPI lacks" rather than "WASM bypasses
+Issue #05."
+
+**Two probe failures that improved the doc** (drift-by-inversion of
+my own claims): (a) tried `new JsNode(...)` to test WASM Cypher; failed
+because JsNode has `private constructor()` per .d.ts — the WASM access
+pattern is different from NAPI's. Forced softening of "richer than
+NAPI" claim from "ships 4 extra methods" to "exposes 4 extra method
+names per .d.ts; live invocation flow unverified." (b) tried
+`llm.isInitialized()` based on `Object.getOwnPropertyNames` enumeration;
+failed because that method isn't in the public .d.ts — wasm-bindgen's
+internal reflection metadata leaked into the proto enumeration. Lesson:
+trust .d.ts surfaces over runtime proto inspection for wasm-bindgen
+packages.
+
+**Project state**: 6 of 6 archetypes shipped, 3 of 3 CLI subcommands, v0.2
+polish closed. Next ship-task is the M17 ratification path, not the
+implementation — `please use ship-task and follow your recommendation on
+next task` produces M17.1 only after the user answers the 7 open questions.
+
+`docs/upstream-issues/README.md` references unchanged from v0.2 polish (M6
+→ M14 still accurate); Issue #08 lands when ratification confirms Q2.
+
 ## Update — v0.2 polish batch outcome (LICENSE + Status callout + 3 CLI flags)
 
 Five v0.2 loose-end items shipped in one milestone commit, closing the trail
