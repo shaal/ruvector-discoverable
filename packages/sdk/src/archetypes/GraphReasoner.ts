@@ -40,6 +40,8 @@ import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { resolveEmbedding, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
+import { WasmGraphBackend } from '../backends/wasm-graph.js';
+import type { GraphBackend } from '../backends/graph-backend.js';
 import type { LocalLLM } from './LocalLLM.js';
 
 // ---------------- Public types ----------------
@@ -270,31 +272,90 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantLift: 'Dynamic attention pruning for traversal-heavy queries.',
     defaultDormantEnable: 'Track upstream publishing.',
   },
+  // ===== WASM-only capabilities (M17.1; gated on transport === 'wasm') =====
+  // These methods exist only in @ruvector/graph-wasm. Native backend declares
+  // them dormant [upstream-binding] (no NAPI delete API per @ruvector/graph-node@2.0.3);
+  // WASM smokeCheck reports observed status — `cypherImport` is broken
+  // upstream per Issue #09; `cypherExport` / `nodeDelete` / `edgeDelete` work.
+  {
+    name: 'cypherExport',
+    source: 'ruvector-graph',
+    probeName: 'cypherExport',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Cypher export is exposed only via @ruvector/graph-wasm. Use transport: \'wasm\' to access.',
+    defaultDormantLift: 'Round-trip a graph to/from Cypher CREATE statements; useful for backups and migration.',
+    defaultDormantEnable: 'await GraphReasoner.create({ ..., backend: { kind: \'wasm\' } })',
+  },
+  {
+    name: 'cypherImport',
+    source: 'ruvector-graph',
+    probeName: 'cypherImport',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Cypher import is exposed only via @ruvector/graph-wasm; use transport: \'wasm\'. Note: the WASM implementation is currently a silent no-op (Issue #09).',
+    defaultDormantLift: 'Bulk-load a graph from Cypher CREATE statements.',
+    defaultDormantEnable: 'await GraphReasoner.create({ ..., backend: { kind: \'wasm\' } }) — but Issue #09 currently blocks real imports.',
+  },
+  {
+    name: 'nodeDelete',
+    source: 'ruvector-graph',
+    probeName: 'nodeDelete',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Node deletion is exposed only via @ruvector/graph-wasm. Native @ruvector/graph-node@2.0.3 has no delete API — graphs are append-only on native transport.',
+    defaultDormantLift: 'Remove nodes after the graph is built (otherwise builders leak data).',
+    defaultDormantEnable: 'await GraphReasoner.create({ ..., backend: { kind: \'wasm\' } })',
+  },
+  {
+    name: 'edgeDelete',
+    source: 'ruvector-graph',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
+    defaultDormantReason: 'Edge deletion is exposed only via @ruvector/graph-wasm. Use transport: \'wasm\' to access.',
+    defaultDormantLift: 'Remove edges after the graph is built (otherwise builders leak data).',
+    defaultDormantEnable: 'await GraphReasoner.create({ ..., backend: { kind: \'wasm\' } })',
+  },
 ];
 
 export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // Internal state. Public API hides the backend.
-  private readonly _backend: NativeGraphBackend;
+  private readonly _backend: GraphBackend;
   private readonly _options: GraphReasonerOptions;
   private readonly _embedder: LocalLLM | null;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
 
-  private constructor(backend: NativeGraphBackend, options: GraphReasonerOptions) {
+  private constructor(backend: GraphBackend, options: GraphReasonerOptions) {
     this._backend = backend;
     this._options = options;
     this._embedder = options.embedder ?? null;
   }
 
-  /** Open or create a graph. */
+  /** Open or create a graph. Dispatches to native, WASM, or HTTP transport. */
   static async create(options: GraphReasonerOptions): Promise<GraphReasoner> {
     validateEmbedderDimensions(options.embedder, options.dimensions, 'GraphReasoner');
-    const backend = await NativeGraphBackend.create({
-      dimensions: options.dimensions,
-      distanceMetric: options.distanceMetric ?? 'Cosine',
-      storagePath: options.storage,
-    });
+    const transport = resolveTransport(options.backend);
+    const distanceMetric = options.distanceMetric ?? 'Cosine';
+    let backend: GraphBackend;
+    if (transport === 'native') {
+      backend = await NativeGraphBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric,
+        ...(options.storage !== undefined && { storagePath: options.storage }),
+      });
+    } else if (transport === 'wasm') {
+      backend = await WasmGraphBackend.create({
+        dimensions: options.dimensions,
+        distanceMetric,
+      });
+    } else {
+      throw new RuVectorError(
+        'CAPABILITY_DEFERRED',
+        'HTTP transport is not yet implemented (M17.x deferred). The upstream @ruvector/server@0.1.0 package is broken-published per Issue #08.',
+      );
+    }
     return new GraphReasoner(backend, options);
   }
 
@@ -395,11 +456,15 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
     this.assertOpen();
     if (!this._cypherWarned) {
       this._cypherWarned = true;
+      const transport = this._backend.kind;
+      const pkg = transport === 'wasm' ? '@ruvector/graph-wasm@2.0.2' : '@ruvector/graph-node@2.0.3';
+      const fallback = transport === 'wasm'
+        ? 'Use stats / getNode / exportCypher for working operations on WASM transport.'
+        : 'Use kHopNeighbors / searchHyperedges / stats for working graph operations in v0.1.';
       // eslint-disable-next-line no-console
       console.warn(
-        '[ruvector-sdk] cypher() is currently a stub in @ruvector/graph-node@2.0.3 — ' +
-        'returns empty results regardless of query. Use kHopNeighbors / searchHyperedges / stats ' +
-        'for working graph operations in v0.1.'
+        `[ruvector-sdk] cypher() is currently a stub in ${pkg} — ` +
+        `returns empty results regardless of query. ${fallback}`
       );
     }
     const start = performance.now();
@@ -505,22 +570,33 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
    */
   async healthCheck(): Promise<HealthCheckResult> {
     this.assertOpen();
-    const bindingChecks = await NativeGraphBackend.smokeCheck();
-    const archetypeChecks = await GraphReasoner._archetypeProbe({
-      dimensions: this._options.dimensions,
-      distanceMetric: this._options.distanceMetric ?? 'Cosine',
-    });
-    // M11.2: auto-embed probe (only runs when the user supplied an embedder).
-    const autoEmbedChecks = this._embedder !== null
+    const transport = this._backend.kind;
+    const bindingChecks = transport === 'wasm'
+      ? await WasmGraphBackend.smokeCheck()
+      : await NativeGraphBackend.smokeCheck();
+    // archetype probe only meaningful on native (uses kHopNeighbors which
+    // is missing on WASM per Issue #09).
+    const archetypeChecks = transport === 'native'
+      ? await GraphReasoner._archetypeProbe({
+          dimensions: this._options.dimensions,
+          distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        })
+      : [];
+    // M11.2: auto-embed probe (only runs when the user supplied an embedder
+    // AND the transport supports kHopNeighbors — which is what the probe
+    // asserts on).
+    const autoEmbedChecks = transport === 'native' && this._embedder !== null
       ? await this._autoEmbedProbe()
       : [{
           name: 'autoEmbed',
           status: 'unsupported' as const,
-          detail: 'no embedder supplied at create-time',
+          detail: this._embedder === null
+            ? 'no embedder supplied at create-time'
+            : 'autoEmbed probe requires kHopNeighbors which is unsupported on WASM transport (Issue #09)',
           durationMs: 0,
           tier: 'archetype' as const,
         }];
-    this._lastHealth = summarize('GraphReasoner', 'native', [...bindingChecks, ...archetypeChecks, ...autoEmbedChecks]);
+    this._lastHealth = summarize('GraphReasoner', transport, [...bindingChecks, ...archetypeChecks, ...autoEmbedChecks]);
     return this._lastHealth;
   }
 
@@ -652,3 +728,22 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
 // the other M5 archetypes which still use it. Once those land in M6+, this
 // re-export is dropped.
 export { NotImplementedError };
+
+/**
+ * Resolve the requested transport from `BackendSpec`. Per M17 §6 Q5:
+ * explicit-first, auto-fallback. Defaults: native in Node, wasm in browser.
+ * HTTP requires explicit opt-in (no env-sniff to avoid surprising remote calls).
+ */
+function resolveTransport(spec: BackendSpec | undefined): 'native' | 'wasm' | 'http' {
+  if (spec === undefined || spec === 'auto') {
+    const isNode = typeof process !== 'undefined' && process.versions?.node !== undefined;
+    return isNode ? 'native' : 'wasm';
+  }
+  if (typeof spec === 'string') {
+    if (spec === 'native' || spec === 'wasm' || spec === 'http') return spec;
+    throw new RuVectorError('INVALID_INPUT', `Unknown transport '${spec}'. Expected 'native' | 'wasm' | 'http' | 'auto'.`);
+  }
+  return spec.kind === 'auto'
+    ? (typeof process !== 'undefined' && process.versions?.node !== undefined ? 'native' : 'wasm')
+    : spec.kind;
+}

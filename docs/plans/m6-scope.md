@@ -194,6 +194,133 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M17.1 outcome (WasmGraphBackend ships; second graph transport delivered)
+
+`packages/sdk/src/backends/wasm-graph.ts` shipped. Second backend
+implementation under the new `GraphBackend` interface (extracted at
+`packages/sdk/src/backends/graph-backend.ts`). `GraphReasoner.create()`
+dispatches on `options.backend?.kind` per Q5 ratification: explicit-first,
+auto-fallback (Node→native, browser→wasm, http→explicit-only).
+
+**Live findings during M17.1 implementation overturned the M17 scope's
+"WASM is richer than NAPI" framing**:
+
+The two bindings have substantively different shapes. WASM `GraphDB.createNode`
+takes `(labels, properties)` (no embedding!), auto-generates UUIDs (no user-
+controlled IDs at the binding layer), and is **missing four central methods**:
+`kHopNeighbors`, `searchHyperedges`, `batchInsert`, `subscribe`. Plus three
+of the existing methods are broken:
+- `query` (Cypher) — same stub bug as Issue #01 affects WASM too
+- `createHyperedge` — throws `"Entity not found in hypergraph"` even for
+  nodes just inserted via createNode
+- `importCypher` — silent no-op (returns success count, stats unchanged)
+
+What WASM DOES add: `deleteNode`, `deleteEdge`, `exportCypher` (all working).
+That's the working WASM-only surface; the missing four and broken three
+were all unanticipated.
+
+**Issue #09 filed** at `docs/upstream-issues/09-graph-wasm-defects.md` —
+bundles all four upstream defects into one paste-ready report with live
+reproducers. Total paste-ready issues now: **9 (#01–#09)**.
+
+**WasmGraphBackend implementation**:
+
+- Implements `createNode/createEdge/getNode/getEdge/stats/deleteNode/
+  deleteEdge/exportCypher` using the working WASM surface
+- Throws `RuVectorError('CAPABILITY_DEFERRED', ...)` on missing methods
+  with transport-pointer messages (`use transport: 'native'`)
+- Maintains `Map<userId, wasmId>` for ID round-tripping (since WASM auto-
+  generates UUIDs); user-facing IDs work transparently across transports
+- Owns the WASM init lifecycle (Q4 ratification): in Node, reads .wasm
+  bytes via `createRequire` + `readFileSync` and passes to `init({
+  module_or_path: bytes })`; in browser, defers to wasm-bindgen's default
+  fetch flow. User code is identical across transports.
+- Drops `Node.embedding` silently with a one-time `console.warn` (WASM
+  nodes don't store embeddings; only hyperedges do)
+- Smoke-check observes 5 ok / 2 broken / 3 unsupported on the live
+  binding; results flow into `getValueReport()` via the M6.2 self-
+  correcting classification — when upstream fixes any defect, the SDK
+  reclassifies automatically with no code change.
+
+**Capability catalog: 4 new WASM-only rows added** (`cypherExport`,
+`cypherImport`, `nodeDelete`, `edgeDelete`). Default-dormant `[upstream-
+binding]` for native transport; the WASM smoke-check probes flip the
+working ones (`cypherExport` / `nodeDelete`) to active when transport=wasm.
+`cypherImport` flips dormant `[upstream-bug]` (silent-no-op observed).
+
+**`reprobe.mjs` v0.4 unchanged this milestone** — `@ruvector/graph-wasm`
+already tracked. The new defects are *runtime* observations, not
+publication-status drift; they live in the smoke-check + Issue #09.
+
+**Drift-by-inversion verified**: temporarily flipped the WASM smoke-check
+stats expectation to `=== 999` (impossible). Re-running the demo correctly
+showed `✗ stats broken expected 999/999, got 3/1`. Restored cleanly.
+
+**M8.2 byte-stability**: native graph demo's diff vs M16/M17.1-baseline
+shows ONLY the expected new dormant rows + capability-count changes. All
+other behavior identical modulo nondeterminism (timestamps, kHop iteration
+order, random probe IDs, durationMs). The 3 KB/TSM/AgentMemory demos that
+fail with `Dimension mismatch: expected 768, got 16` are pre-existing
+Issue #03 (dimension singleton in `@ruvector/core`) — verified via
+`git stash` + re-run on `d869694`; failure reproduces, NOT an M17.1
+regression.
+
+**Project-wide value-report breakdown — GraphReasoner under both transports**:
+
+| Transport | Active | Dormant | upstream-binding | upstream-bug | sdk-integration |
+|---|--:|--:|--:|--:|--:|
+| native | 4 | 9 | 6 | 1 | 1 |
+| wasm   | 4 | 9 | 4 | 4 | 1 |
+
+The shape inverts: native has more dormant `upstream-binding` (4 missing
+WASM-only methods), WASM has more dormant `upstream-bug` (3 from Issue
+#09 plus 1 inherited from Issue #01). Same total active / dormant counts;
+different cause distribution.
+
+**Caught live during implementation** (drift-by-inversion of own assumptions):
+- M17 scope claimed "WASM exposes 4 methods NAPI lacks" based on .d.ts
+  surface enumeration. M17.1 found this true for delete/import/export but
+  also found WASM is **missing 4 methods native has**. Net: two
+  asymmetric surfaces, not WASM-as-superset.
+- The Cypher stub warning hardcoded `@ruvector/graph-node@2.0.3` even
+  when running over WASM transport. Fixed inline to surface the actual
+  package version per transport.
+- KvCacheConfigWasm vs model_path was disproven in M17 scoping; M17.1
+  confirmed: WASM is no Issue #05 workaround — it has its own equivalent
+  defects (Issue #09).
+
+**v0.2 work-items captured inline**:
+- Real WASM streaming via `AsyncQueryExecutor` + `ResultStream` (45-export
+  surface includes both; not yet probed for usability).
+- Surface-contract probes in `reprobe.mjs` (similar to M11.3 v0.2 CLI
+  surface contracts) to detect when upstream's `.d.ts` adds the missing
+  four methods.
+- `subscribe` consistency: throws on WASM, no-ops on native — symmetrize
+  via documented `subscribe` capability check.
+- Browser-env actual test (not just source-inspection of resolveTransport).
+- Node 18 LTS test (logically supported but not exercised this session).
+
+**Project state**:
+- 6 archetypes shipped
+- 3 of 3 CLI subcommands
+- 9 paste-ready upstream issues (#01–#09)
+- 2 of 3 transport backends shipped (native + WASM); HTTP deferred per
+  Issue #08 broken-publish
+- v0.4 reprobe (31 npm + 1 CLI; +9 transport-relevant rows, +published-
+  broken expectation type)
+- v1.0 SDK product narrative complete; M17 transport story half-shipped
+
+**Next ship-task candidate**: M17.2 — WasmLocalLLMBackend. Per M17 scope
+§Recommendation, M17.1 mirrors native-graph; M17.2 mirrors native-ruvllm
+over `@ruvector/ruvllm-wasm@2.0.0`'s 45-export surface. Now that the
+backend-dispatcher pattern is validated by M17.1, M17.2 should be
+substantively easier. Alternatively, M18 v0.3 starts the
+`@ruvector/router` stealth-publication workstream as a parallel KB
+backend independent of `@ruvector/core`.
+
+`docs/upstream-issues/README.md` references updated to include #09;
+intro range bumped from "M6 → M17" to "M6 → M17.1."
+
 ## Update — M17 ratification + governance (CLAUDE.md, PRD §11, Issue #08, reprobe v0.4)
 
 User ratified all 7 M17 open questions per my leans, AND directed

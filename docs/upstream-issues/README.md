@@ -1,6 +1,6 @@
 # Upstream issue reports
 
-These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI bindings (M6 → M17 in `m6-scope.md`).
+These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI/WASM bindings (M6 → M17.1 in `m6-scope.md`).
 
 The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smoke-check `[observed via probe]` strings) is the evidence in each report — that infrastructure was built precisely so that observations would convert directly into reproducible upstream issues.
 
@@ -23,6 +23,7 @@ The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smo
 | [`06-query-route-under-populated-fields.md`](06-query-route-under-populated-fields.md) | Wrapper bug | `@ruvector/ruvllm@2.5.4` |
 | [`07-rvagent-family-unpublished.md`](07-rvagent-family-unpublished.md) | Coverage gap | `@ruvector/rvagent-*` (9 packages) |
 | [`08-server-cluster-broken-publish.md`](08-server-cluster-broken-publish.md) | Publishing pipeline | `@ruvector/server@0.1.0`, `@ruvector/cluster@0.1.0` |
+| [`09-graph-wasm-defects.md`](09-graph-wasm-defects.md) | Multiple bugs + missing API | `@ruvector/graph-wasm@2.0.2` |
 
 ## How the SDK found these
 

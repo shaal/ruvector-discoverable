@@ -17,28 +17,28 @@ import {
   GraphDatabase,
   JsDistanceMetric,
   type JsBatchInsert,
-  type JsBatchResult,
   type JsEdge,
   type JsGraphOptions,
   type JsHyperedge,
   type JsHyperedgeQuery,
   type JsHyperedgeResult,
   type JsNode,
-  type JsQueryResult,
-  type JsGraphStats,
 } from '@ruvector/graph-node';
 
-import type { Edge, Hyperedge, HyperedgeSearchOptions, Node } from '../archetypes/GraphReasoner.js';
+import type { HyperedgeSearchOptions } from '../archetypes/GraphReasoner.js';
 import { RuVectorError } from '../core/index.js';
 import { runCheck, type CheckResult } from '../core/health.js';
-
-// Inputs the backend accepts have a *required* embedding. The public Node /
-// Edge / Hyperedge types make `embedding` optional (M11.2: derivable via a
-// wired LocalLLM). Resolution happens in the archetype layer; by the time
-// values reach the backend, embeddings must be present.
-type ResolvedNode = Omit<Node, 'embedding'> & { readonly embedding: Float32Array };
-type ResolvedEdge = Omit<Edge, 'embedding'> & { readonly embedding: Float32Array };
-type ResolvedHyperedge = Omit<Hyperedge, 'embedding'> & { readonly embedding: Float32Array };
+import type {
+  GraphBackend,
+  GraphBackendBatchResult,
+  GraphBackendHyperedgeResult,
+  GraphBackendQueryResult,
+  GraphBackendSmokeCheckable,
+  GraphBackendStats,
+  ResolvedEdge,
+  ResolvedHyperedge,
+  ResolvedNode,
+} from './graph-backend.js';
 
 export interface NativeGraphBackendOptions {
   readonly dimensions: number;
@@ -46,21 +46,22 @@ export interface NativeGraphBackendOptions {
   readonly storagePath?: string;
 }
 
-export class NativeGraphBackend {
+export class NativeGraphBackend implements GraphBackend {
   readonly kind = 'native' as const;
   readonly capabilities: ReadonlySet<string>;
   private readonly _db: GraphDatabase;
 
   private constructor(db: GraphDatabase) {
     this._db = db;
-    // Capabilities the binding exposes today (v0.1).
+    // Capabilities the binding exposes today. Listed in the standard
+    // catalog names so GraphReasoner can check via `backend.capabilities.has`.
     this.capabilities = new Set<string>([
       'cypher',
       'kHopTraversal',
       'hyperedgeSearch',
-      'transactions',
-      'graphChangeSubscription',
       'graphStats',
+      'batchInsert',
+      'graphChangeSubscription',
     ]);
   }
 
@@ -95,18 +96,24 @@ export class NativeGraphBackend {
     return this._db.createHyperedge(toJsHyperedge(edge));
   }
 
-  async batchInsert(input: { nodes: readonly ResolvedNode[]; edges: readonly ResolvedEdge[] }): Promise<JsBatchResult> {
+  async batchInsert(input: { nodes: readonly ResolvedNode[]; edges: readonly ResolvedEdge[] }): Promise<GraphBackendBatchResult> {
     const batch: JsBatchInsert = {
       nodes: input.nodes.map(toJsNode),
       edges: input.edges.map(toJsEdge),
     };
-    return this._db.batchInsert(batch);
+    const result = await this._db.batchInsert(batch);
+    return { nodeIds: result.nodeIds, edgeIds: result.edgeIds };
   }
 
   // ----- Reads -----
 
-  async cypher(query: string): Promise<JsQueryResult> {
-    return this._db.query(query);
+  async cypher(query: string): Promise<GraphBackendQueryResult> {
+    const r = await this._db.query(query);
+    return {
+      nodes: r.nodes,
+      edges: r.edges,
+      ...(r.stats !== undefined && { stats: { totalNodes: r.stats.totalNodes, totalEdges: r.stats.totalEdges, avgDegree: r.stats.avgDegree } }),
+    };
   }
 
   async kHopNeighbors(startNode: string, hops: number): Promise<readonly string[]> {
@@ -116,16 +123,33 @@ export class NativeGraphBackend {
     return this._db.kHopNeighbors(startNode, hops);
   }
 
-  async searchHyperedges(options: HyperedgeSearchOptions): Promise<readonly JsHyperedgeResult[]> {
+  async searchHyperedges(options: HyperedgeSearchOptions): Promise<readonly GraphBackendHyperedgeResult[]> {
     const q: JsHyperedgeQuery = {
       embedding: options.embedding,
       k: options.k,
     };
-    return this._db.searchHyperedges(q);
+    const hits = await this._db.searchHyperedges(q);
+    return hits.map((h: JsHyperedgeResult) => ({ id: h.id, score: h.score }));
   }
 
-  async stats(): Promise<JsGraphStats> {
-    return this._db.stats();
+  async stats(): Promise<GraphBackendStats> {
+    const s = await this._db.stats();
+    return { totalNodes: s.totalNodes, totalEdges: s.totalEdges, avgDegree: s.avgDegree };
+  }
+
+  // ----- WASM-only (native rejects with clear pointer to wasm transport) -----
+
+  async deleteNode(_id: string): Promise<boolean> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'deleteNode is not available on the native transport (@ruvector/graph-node@2.0.3 has no delete API). Use transport: \'wasm\' to access deleteNode/deleteEdge/importCypher/exportCypher.');
+  }
+  async deleteEdge(_id: string): Promise<boolean> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'deleteEdge is not available on the native transport (@ruvector/graph-node@2.0.3 has no delete API). Use transport: \'wasm\'.');
+  }
+  async exportCypher(): Promise<string> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'exportCypher is not available on the native transport. Use transport: \'wasm\'.');
+  }
+  async importCypher(_statements: readonly string[]): Promise<number> {
+    throw new RuVectorError('CAPABILITY_DEFERRED', 'importCypher is not available on the native transport. Use transport: \'wasm\' (note: import is broken upstream per Issue #09).');
   }
 
   subscribe(listener: (change: unknown) => void): void {
