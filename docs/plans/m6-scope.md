@@ -194,6 +194,48 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M9 v0.1 outcome (Graph RAG via cross-archetype coordination — first dormant→active flip)
+
+**The first milestone where a capability moves from dormant to active without an upstream binding change.** `graphRag` had been dormant since KnowledgeBase v0.1 (M7) with the dormant reason "KnowledgeBase does not coordinate with @ruvector/graph-node yet." M9 wires that coordination and the capability flips automatically because tier-3 (M8.1) sees the probe pass and the value-report reducer (M8.2) reflects observation over declaration.
+
+How it works:
+- `KnowledgeBase` accepts an optional `graphReasoner: GraphReasoner` and `entityExtractor: EntityExtractor` at create-time.
+- The default extractor is heuristic: `#hashtags` plus an explicit `metadata.entities: string[]` array. Honest about its limits; users can replace it.
+- During `ingest`, the SDK extracts entities from each doc, creates a graph node for the doc + nodes for each entity, and writes `MENTIONS` edges between them. Entity embeddings are deterministic hashes — semantically meaningless, but kHop traversal is structural so it doesn't matter.
+- During `retrieve(query, { graphRagHops })`, after vector search returns top-k, the SDK fans out from each doc node by `graphRagHops` and adds reachable docs as `graph-adjacent` citations with bridge-entity attribution.
+
+Schema constraint (caught by the tier-3 probe on first run): `graphRagHops: 1` returns no graph-adjacent docs — the doc-entity graph is bipartite, so reaching a sibling doc through a shared entity takes `2` hops (doc → entity → other-doc). Documented loudly on `RetrieveOptions.graphRagHops`. Probe runs at hops=2.
+
+Live demo result:
+```
+Plain retrieve (vector-only, k=3):
+  vector  auth-spec      score=2.03e-11
+  vector  monitoring     score=8.35e-1
+  vector  crypto-notes   score=9.42e-1
+
+Retrieve with Graph RAG (k=1, graphRagHops=2):
+  vector          auth-spec      score=2.03e-11
+  graph-adjacent  crypto-notes   score=1.02e-11 (via entity:auth)
+
+Value report:
+  5 of 9 unique capabilities active. 4 dormant — mixed (5/9 observed).
+  active:
+    ✓ vectorSearch     2 invocations  [ruvector-core]
+    ✓ vectorInsert     1 invocations  [ruvector-core]
+    ✓ health           0 invocations  [ruvector-core]
+    ✓ metrics          0 invocations  [ruvector-core]
+    ✓ graphRag         1 invocations  [ruvector-graph]    ← FIRST FLIP
+```
+
+Tier-3 probe assertion is a 3-way invariant: A must be in vector hits, B must be graph-adjacent via shared entity, C (no shared entity) must NOT appear. Stronger than just "B is reachable" — also enforces that graph-RAG isn't being too greedy.
+
+Open v0.2 work-items:
+- Validate dimension match between KB and graphReasoner at create-time (currently surfaces as upstream error during ingest).
+- `graphRagHops < 2` could throw or warn (currently silently returns 0 graph-adjacent docs).
+- Multiple bridge entities in the same doc-pair: report all, not just the first.
+- `_docEntities` map needs eviction when a delete API on KB lands.
+- Real NER extractor as a contributed extension (not in core SDK).
+
 ## Update — M8.2 outcome (extract shared reducer; unify introspect semantics)
 
 After three archetypes confirmed the catalog/probe pattern was stable, the duplicated `getValueReport` and `introspect` bodies were extracted into `core/capability-catalog.ts`. Each archetype now keeps only its own data (the `CAPABILITY_CATALOG` array) and state (`_invocationCounts`, `_lastHealth`); the reducer logic lives in one place and is consumed via 5-line delegations.

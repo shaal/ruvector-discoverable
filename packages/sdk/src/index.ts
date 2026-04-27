@@ -23,11 +23,13 @@
  */
 
 // Archetypes (named exports)
-export { KnowledgeBase } from './archetypes/KnowledgeBase.js';
+export { KnowledgeBase, defaultEntityExtractor } from './archetypes/KnowledgeBase.js';
 export type {
   KnowledgeBaseOptions,
   KnowledgeBaseCapabilityConfig,
   Document,
+  Entity,
+  EntityExtractor,
   RetrieveOptions,
   RetrieveResult,
   AskOptions,

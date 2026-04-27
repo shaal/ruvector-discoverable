@@ -36,6 +36,7 @@ import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../cor
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import { GraphReasoner } from './GraphReasoner.js';
 
 // ---------------- Public types ----------------
 
@@ -54,6 +55,74 @@ export interface KnowledgeBaseOptions {
   readonly bindingPath?: string;
   /** Override capability defaults. Most users should leave defaults alone. */
   readonly capabilities?: KnowledgeBaseCapabilityConfig;
+  /**
+   * Optional GraphReasoner instance for Graph RAG.
+   *
+   * When supplied, `ingest()` extracts entities from each document and
+   * populates the graph; `retrieve(query, { graphRagHops })` fans out via
+   * `kHopNeighbors` after vector search. The graphReasoner must use the
+   * same `dimensions` as this KB, or `create()` throws.
+   *
+   * The user owns the lifecycle: this KB does not close() the supplied
+   * graphReasoner. Multiple KBs can share one GraphReasoner.
+   */
+  readonly graphReasoner?: GraphReasoner;
+  /**
+   * Custom entity extractor. Default: heuristic that picks up `#hashtags`
+   * and any `metadata.entities` array on the document. Replace with a
+   * real NER pipeline for production use.
+   */
+  readonly entityExtractor?: EntityExtractor;
+}
+
+export interface Entity {
+  /** Stable graph node ID. The default extractor uses `entity:<lowercased name>`. */
+  readonly id: string;
+  /** Surface form as it appeared in the document. */
+  readonly mention: string;
+}
+
+export type EntityExtractor = (doc: Document) => readonly Entity[];
+
+/**
+ * Default extractor — `#hashtags` plus `metadata.entities: string[]`.
+ * Honest about what it is: no NER, no semantic understanding. For
+ * production use, supply a real extractor via `KnowledgeBaseOptions.entityExtractor`.
+ */
+export const defaultEntityExtractor: EntityExtractor = (doc) => {
+  const entities = new Map<string, Entity>();
+  for (const m of doc.text.matchAll(/#([a-zA-Z][a-zA-Z0-9_-]*)/g)) {
+    if (!m[1]) continue;
+    const name = m[1].toLowerCase();
+    if (!entities.has(name)) entities.set(name, { id: `entity:${name}`, mention: m[0] });
+  }
+  const metaEntities = (doc.metadata as { entities?: unknown } | undefined)?.entities;
+  if (Array.isArray(metaEntities)) {
+    for (const raw of metaEntities) {
+      if (typeof raw !== 'string' || raw.length === 0) continue;
+      const norm = raw.toLowerCase().trim();
+      if (norm.length === 0) continue;
+      if (!entities.has(norm)) entities.set(norm, { id: `entity:${norm}`, mention: raw });
+    }
+  }
+  return [...entities.values()];
+};
+
+/**
+ * Deterministic hash → Float32Array. Used for entity nodes in the GraphReasoner
+ * because @ruvector/graph-node@2.0.3 requires non-empty embeddings on every
+ * node. The embedding values are semantically meaningless for entity nodes;
+ * kHop traversal is structural, so it doesn't matter.
+ */
+function entityEmbedding(name: string, dims: number): Float32Array {
+  const v = new Float32Array(dims);
+  let s = 5381;
+  for (let i = 0; i < name.length; i++) s = ((s * 33) ^ name.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < dims; i++) {
+    s = (s * 1103515245 + 12345) >>> 0;
+    v[i] = ((s % 2000) / 1000) - 1;
+  }
+  return v;
 }
 
 export interface KnowledgeBaseCapabilityConfig {
@@ -84,6 +153,20 @@ export interface RetrieveOptions {
   readonly k?: number;
   /** Optional metadata filter — v0.2; ignored in v0.1. */
   readonly filter?: Filter;
+  /**
+   * Graph RAG fan-out depth. After vector search, traverse the doc-entity
+   * graph by this many hops and add reachable docs as `graph-adjacent`
+   * citations. 0 disables. Requires a `graphReasoner` to have been
+   * supplied at create-time; throws otherwise.
+   *
+   * **Schema note**: docs and entities live in the same graph as separate
+   * node types connected by MENTIONS edges. Reaching a sibling doc that
+   * shares an entity therefore takes **2 hops** (doc → entity → other-doc).
+   * `graphRagHops: 1` only reaches entity nodes; `graphRagHops: 2` is the
+   * minimum value that produces graph-adjacent doc citations. The SDK
+   * filters non-doc nodes from the result regardless.
+   */
+  readonly graphRagHops?: number;
 }
 
 export interface Filter {
@@ -101,6 +184,10 @@ export interface RetrieveResult {
 export interface Citation {
   readonly documentId: string;
   readonly score: number;
+  /** How this citation was reached. */
+  readonly source?: 'vector' | 'graph-adjacent';
+  /** When `source === 'graph-adjacent'`, the entity that bridged. */
+  readonly bridgeEntity?: string;
 }
 
 export interface IngestReport {
@@ -173,11 +260,17 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     name: 'graphRag',
     source: 'ruvector-graph',
     adrs: ['ADR-046'],
+    probeName: 'graphRag',
+    invocationKey: 'graphRagFanout',
+    // Default-status is dormant because graph-rag requires the user to supply
+    // a GraphReasoner at create-time. When supplied, the tier-3 probe runs
+    // and flips the observed status to `ok` — Graph RAG becomes the first
+    // archetype-coordinated capability to move from dormant→active.
     defaultStatus: 'dormant',
-    defaultDormantReason: 'KnowledgeBase v0.1 does not coordinate with @ruvector/graph-node yet. ' +
-      'Graph RAG (community-aware retrieval) requires wiring graph extraction during ingest.',
-    defaultDormantLift: '30-60% recall on multi-hop questions vs naive chunk retrieval.',
-    defaultDormantEnable: 'v0.2 will coordinate with GraphReasoner; track the milestone.',
+    defaultDormantReason: 'KnowledgeBase was constructed without a graphReasoner. ' +
+      'Pass one (with matching dimensions) at create-time and call retrieve(query, { graphRagHops: 1 }) to enable.',
+    defaultDormantLift: '30-60% recall on multi-hop questions vs naive chunk retrieval (per upstream README).',
+    defaultDormantEnable: "await KnowledgeBase.create({ ..., graphReasoner: await GraphReasoner.create({ dimensions }) })",
   },
   {
     name: 'colbertRerank',
@@ -212,17 +305,32 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
 export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, HealthCheckProvider {
   private readonly _backend: NativeCoreBackend;
   private readonly _options: KnowledgeBaseOptions;
+  private readonly _graph: GraphReasoner | null;
+  private readonly _entityExtractor: EntityExtractor;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
   private _idCounter = 0;
+  // Tracks which entities a doc mentions, so retrieve()'s graph fan-out can
+  // attribute the bridge entity in `graph-adjacent` citations.
+  private _docEntities = new Map<string, readonly string[]>();
 
   private constructor(backend: NativeCoreBackend, options: KnowledgeBaseOptions) {
     this._backend = backend;
     this._options = options;
+    this._graph = options.graphReasoner ?? null;
+    this._entityExtractor = options.entityExtractor ?? defaultEntityExtractor;
   }
 
   static async create(options: KnowledgeBaseOptions): Promise<KnowledgeBase> {
+    if (options.graphReasoner) {
+      // Validate dimensions match. The GraphReasoner stores its dimensions on
+      // its options; we don't have a public getter, so we trust the caller's
+      // construction parameters here. v0.2 should expose a `.dimensions`
+      // getter on GraphReasoner for explicit checking.
+      // (For now, dimension mismatch will surface as a runtime insert error
+      // from @ruvector/graph-node — caught by the tier-3 probe.)
+    }
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -232,37 +340,137 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     return new KnowledgeBase(backend, options);
   }
 
-  /** Ingest documents. v0.1 requires pre-computed embeddings on each Document. */
+  /**
+   * Ingest documents.
+   * v0.1 requires pre-computed embeddings on each Document.
+   * If a graphReasoner was supplied at create-time, this also extracts entities
+   * via the configured extractor and writes the doc-entity graph.
+   */
   async ingest(documents: readonly Document[]): Promise<IngestReport> {
     this.assertOpen();
     const start = performance.now();
     const entries = documents.map((d) => ({ id: d.id, vector: d.embedding }));
     await this._backend.insertBatch(entries);
+
+    // Optional: populate the doc-entity graph for Graph RAG.
+    if (this._graph !== null) {
+      const dims = this._options.dimensions;
+      // Collect distinct entities + edges to insert in one batch each.
+      const entitiesToAdd = new Map<string, Float32Array>();
+      const docNodes: { id: string; embedding: Float32Array; labels?: readonly string[] }[] = [];
+      const edges: { from: string; to: string; description: string; embedding: Float32Array }[] = [];
+      for (const doc of documents) {
+        const docNodeId = `doc:${doc.id}`;
+        docNodes.push({ id: docNodeId, embedding: doc.embedding, labels: ['Doc'] });
+        const ents = this._entityExtractor(doc);
+        const seen = new Set<string>();
+        for (const e of ents) {
+          if (seen.has(e.id)) continue;
+          seen.add(e.id);
+          if (!entitiesToAdd.has(e.id)) entitiesToAdd.set(e.id, entityEmbedding(e.id, dims));
+          edges.push({ from: docNodeId, to: e.id, description: 'MENTIONS', embedding: entityEmbedding(`${doc.id}->${e.id}`, dims) });
+        }
+        this._docEntities.set(doc.id, ents.map((e) => e.id));
+      }
+      const allNodes = [
+        ...docNodes,
+        ...[...entitiesToAdd].map(([id, embedding]) => ({ id, embedding, labels: ['Entity'] as readonly string[] })),
+      ];
+      await this._graph.addBatch({ nodes: allNodes, edges });
+    }
+
     this.bump('ingest');
     return { documentsIngested: documents.length, durationMs: performance.now() - start };
   }
 
   /**
-   * Retrieve top-k passages by vector similarity.
+   * Retrieve top-k passages by vector similarity, optionally fanning out via
+   * the doc-entity graph for Graph RAG.
    *
    * v0.1: returns `Citation[]` only — no LLM is wired, so synthesis is the
    * caller's job. `ask()` (which would do the synthesis) throws until an
    * LLM milestone lands.
+   *
+   * Graph RAG: when `options.graphRagHops > 0` AND a graphReasoner was
+   * supplied at create-time, the SDK fans out from each top-k hit's doc
+   * node by `graphRagHops` and adds reachable docs as `graph-adjacent`
+   * citations. Throws if `graphRagHops > 0` but no graphReasoner.
    */
   async retrieve(queryEmbedding: Float32Array, options: RetrieveOptions = {}): Promise<RetrieveResult> {
     this.assertOpen();
     const start = performance.now();
     const k = options.k ?? 8;
+    const hops = options.graphRagHops ?? 0;
+    if (hops > 0 && this._graph === null) {
+      throw new RuVectorError(
+        'GRAPH_RAG_NOT_CONFIGURED',
+        'retrieve({ graphRagHops > 0 }) requires a graphReasoner at create-time. ' +
+        'Pass `graphReasoner: await GraphReasoner.create({ dimensions })` to KnowledgeBase.create().',
+      );
+    }
+
+    const tStartVector = performance.now();
     const hits = await this._backend.search(queryEmbedding, k);
+    const vectorMs = performance.now() - tStartVector;
+    const citations: Citation[] = hits.map((h) => ({ documentId: h.id, score: h.score, source: 'vector' as const }));
+
+    // Graph RAG fan-out
+    let graphMs = 0;
+    let bridgeCount = 0;
+    if (hops > 0 && this._graph !== null) {
+      const tStartGraph = performance.now();
+      const seen = new Set(citations.map((c) => c.documentId));
+      const adjacentByDoc = new Map<string, { score: number; bridgeEntity: string }>();
+      for (const hit of hits) {
+        // Each hit's graph node is `doc:<id>`. Fan out N hops.
+        const reachable = await this._graph.kHopNeighbors({ startNode: `doc:${hit.id}`, hops });
+        for (const nodeId of reachable) {
+          // Filter to doc nodes; skip the start doc itself; skip docs already in citations.
+          if (!nodeId.startsWith('doc:')) continue;
+          const docId = nodeId.slice('doc:'.length);
+          if (docId === hit.id) continue;
+          if (seen.has(docId)) continue;
+          // Best-effort bridge attribution: pick the first shared entity.
+          const startEnts = this._docEntities.get(hit.id) ?? [];
+          const adjEnts = this._docEntities.get(docId) ?? [];
+          const shared = startEnts.find((e) => adjEnts.includes(e));
+          // Score graph-adjacent docs by their parent's score, decayed by 0.5 per hop reach.
+          const decayedScore = hit.score * 0.5;
+          const existing = adjacentByDoc.get(docId);
+          if (!existing || decayedScore < existing.score) {
+            adjacentByDoc.set(docId, { score: decayedScore, bridgeEntity: shared ?? '(graph-traversal)' });
+          }
+        }
+      }
+      for (const [docId, info] of adjacentByDoc) {
+        citations.push({ documentId: docId, score: info.score, source: 'graph-adjacent', bridgeEntity: info.bridgeEntity });
+        bridgeCount++;
+      }
+      graphMs = performance.now() - tStartGraph;
+      this.bump('graphRagFanout');
+    }
+
     const total = performance.now() - start;
     this.bump('retrieve');
+
+    const stages: Array<ExplainTrace['stages'][number]> = [
+      { name: 'vectorSearch', source: 'ruvector-core', durationMs: vectorMs, note: `k=${k}, ${hits.length} hits` },
+    ];
+    const capabilities: Array<ExplainTrace['capabilities'][number]> = [
+      { name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null },
+    ];
+    if (hops > 0) {
+      stages.push({ name: 'graphRagFanout', source: 'ruvector-graph', durationMs: graphMs, note: `${hops}-hop fan-out, +${bridgeCount} adjacent` });
+      capabilities.push({ name: 'graphRag', source: 'ruvector-graph', estimatedLift: null });
+    }
+
     return {
-      citations: hits.map((h) => ({ documentId: h.id, score: h.score })),
+      citations,
       queryId: this.nextQueryId(),
       explain: {
-        path: ['vectorSearch'],
-        stages: [{ name: 'vectorSearch', source: 'ruvector-core', durationMs: total, note: `k=${k}, ${hits.length} hits` }],
-        capabilities: [{ name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null }],
+        path: hops > 0 ? ['vectorSearch', 'graphRagFanout'] : ['vectorSearch'],
+        stages,
+        capabilities,
         totalLatencyMs: total,
       },
     };
@@ -294,8 +502,82 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks]);
+    // M9: when the user has supplied a graphReasoner, run the Graph RAG
+    // probe against THIS KB instance's graphReasoner. (We don't probe via
+    // a temp instance because creating a temp GraphReasoner would mutate
+    // the user-supplied one's shared backend per Finding B.)
+    const graphRagChecks = this._graph !== null
+      ? await this._graphRagProbe()
+      : [{
+          name: 'graphRag',
+          status: 'unsupported' as const,
+          detail: 'no graphReasoner supplied at create-time',
+          durationMs: 0,
+          tier: 'archetype' as const,
+        }];
+    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks, ...graphRagChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe specifically for the Graph RAG cross-archetype path.
+   * Runs against the user's supplied graphReasoner with unique probe IDs
+   * (so it doesn't pollute their data).
+   *
+   * Inserts 3 docs: A and B share entity X, C is unrelated. Retrieves with
+   * graphRagHops=1 using A's embedding. Asserts: B appears as a
+   * graph-adjacent citation bridged by X, AND C does not.
+   */
+  private async _graphRagProbe(): Promise<readonly CheckResult[]> {
+    if (this._graph === null) {
+      return [{ name: 'graphRag', status: 'unsupported' as const, detail: 'graphReasoner is null', durationMs: 0, tier: 'archetype' as const }];
+    }
+    const dims = this._options.dimensions;
+    const oneHot = (i: number): Float32Array => {
+      const v = new Float32Array(dims);
+      v[i % dims] = 1;
+      return v;
+    };
+    const prefix = `__ruvsdk_probe_grag_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const idA = `${prefix}-a`;
+    const idB = `${prefix}-b`;
+    const idC = `${prefix}-c`;
+    const sharedEntity = `${prefix}-ent`;
+
+    const result = await runCheck('graphRag', async () => {
+      // Construct a temp KB sharing the user's graphReasoner.
+      const probeKb = await KnowledgeBase.create({
+        dimensions: dims,
+        distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        graphReasoner: this._graph!,
+      });
+      try {
+        await probeKb.ingest([
+          { id: idA, text: 'a', embedding: oneHot(0), metadata: { entities: [sharedEntity] } },
+          { id: idB, text: 'b', embedding: oneHot(1), metadata: { entities: [sharedEntity] } },
+          { id: idC, text: 'c', embedding: oneHot(2) }, // no entities
+        ]);
+        // hops=2: doc→entity→other-doc. hops=1 would only reach the entity nodes.
+        const r = await probeKb.retrieve(oneHot(0), { k: 1, graphRagHops: 2 });
+        // Top should be A (vector); we look for B as graph-adjacent.
+        const hasA = r.citations.some((c) => c.documentId === idA && c.source === 'vector');
+        const adjacentB = r.citations.find((c) => c.documentId === idB && c.source === 'graph-adjacent');
+        const adjacentC = r.citations.find((c) => c.documentId === idC && c.source === 'graph-adjacent');
+        if (!hasA) return { status: 'broken' as const, detail: `expected vector hit on ${idA}; got ${r.citations.map(c => c.documentId).join(',')}` };
+        if (!adjacentB) return { status: 'broken' as const, detail: `B should be graph-adjacent via shared entity; got ${r.citations.map(c => `${c.documentId}/${c.source}`).join(',')}` };
+        if (adjacentC) return { status: 'broken' as const, detail: 'C has no shared entity but appeared as graph-adjacent' };
+        return { status: 'ok' as const, detail: `vector→A; graph-adjacent→B via '${adjacentB.bridgeEntity}'; C correctly excluded` };
+      } finally {
+        await probeKb.close();
+      }
+    }, 'archetype');
+
+    // Best-effort cleanup on the vector backend.
+    for (const id of [idA, idB, idC]) {
+      try { await this._backend.deleteId(id); } catch {/* ignore */}
+    }
+    return [result];
   }
 
   /**

@@ -11,7 +11,7 @@
 
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { KnowledgeBase } from '../../dist/index.js';
+import { KnowledgeBase, GraphReasoner } from '../../dist/index.js';
 
 const DIMS = 16;
 
@@ -38,12 +38,18 @@ function pseudoEmbed(seed) {
   return v;
 }
 
-console.log(`Opening KnowledgeBase (in-memory, dims=${DIMS})...`);
+console.log(`Opening KnowledgeBase + GraphReasoner (in-memory, dims=${DIMS})...`);
 console.log(`  binding: ${explicitBinding}`);
+
+// M9: cross-archetype coordination. The KB takes a GraphReasoner so ingest()
+// populates the doc-entity graph and retrieve() can fan out via kHopNeighbors.
+// User-supplied — KB doesn't auto-construct it.
+const graph = await GraphReasoner.create({ dimensions: DIMS, distanceMetric: 'Cosine' });
 const kb = await KnowledgeBase.create({
   dimensions: DIMS,
   distanceMetric: 'Cosine',
   bindingPath: explicitBinding,
+  graphReasoner: graph,
 });
 
 console.log('\n[0a] Value report BEFORE healthCheck — declared only:');
@@ -60,28 +66,38 @@ for (const c of health.checks) {
   console.log(`    ${icon} ${c.name.padEnd(16)} ${c.status.padEnd(12)} ${c.detail ?? ''}`);
 }
 
-console.log('\n[1] Ingesting 5 documents...');
+console.log('\n[1] Ingesting 5 documents (with #hashtag entities for Graph RAG)...');
 const docs = [
-  { id: 'auth-spec',     text: 'OAuth2 authorization code flow with PKCE',          embedding: pseudoEmbed('auth-oauth2-pkce') },
-  { id: 'db-design',     text: 'Schema migration patterns and rollback strategies', embedding: pseudoEmbed('db-migrations') },
-  { id: 'api-style',     text: 'REST endpoint conventions and pagination',          embedding: pseudoEmbed('rest-api-style') },
-  { id: 'crypto-notes',  text: 'Token rotation and key signing for JWTs',           embedding: pseudoEmbed('crypto-jwt') },
-  { id: 'monitoring',    text: 'Latency p99 and error budget alerts',               embedding: pseudoEmbed('observability-slo') },
+  { id: 'auth-spec',     text: 'OAuth2 authorization code flow with PKCE #auth #oauth',  embedding: pseudoEmbed('auth-oauth2-pkce'), metadata: { topic: 'auth' } },
+  { id: 'db-design',     text: 'Schema migration patterns and rollback strategies #db', embedding: pseudoEmbed('db-migrations'), metadata: { topic: 'db' } },
+  { id: 'api-style',     text: 'REST endpoint conventions and pagination',              embedding: pseudoEmbed('rest-api-style') },
+  { id: 'crypto-notes',  text: 'Token rotation and key signing for JWTs #auth #jwt',    embedding: pseudoEmbed('crypto-jwt'), metadata: { topic: 'auth' } },
+  { id: 'monitoring',    text: 'Latency p99 and error budget alerts',                   embedding: pseudoEmbed('observability-slo') },
 ];
 const ingest = await kb.ingest(docs);
 console.log(`  inserted ${ingest.documentsIngested} documents in ${ingest.durationMs.toFixed(2)}ms (len=${await kb.len()})`);
+console.log(`  graph populated: ${(await graph.stats()).totalNodes} nodes, ${(await graph.stats()).totalEdges} edges`);
 
-console.log('\n[2] Retrieving for query "auth + JWT":');
-const queryEmb = pseudoEmbed('auth-oauth2-pkce'); // approximates "auth + JWT"
-const result = await kb.retrieve(queryEmb, { k: 3 });
-console.log(`  ${result.citations.length} citations, queryId=${result.queryId}`);
-for (const c of result.citations) {
-  console.log(`    ${c.documentId.padEnd(14)} score=${c.score.toExponential(2)}`);
+console.log('\n[2a] Plain retrieve (vector-only, k=3):');
+const queryEmb = pseudoEmbed('auth-oauth2-pkce');
+const r0 = await kb.retrieve(queryEmb, { k: 3 });
+console.log(`  ${r0.citations.length} citations:`);
+for (const c of r0.citations) {
+  console.log(`    ${(c.source ?? 'vector').padEnd(15)} ${c.documentId.padEnd(14)} score=${c.score.toExponential(2)}`);
 }
-console.log(`  explain: ${result.explain.path.join(' → ')} (${result.explain.totalLatencyMs.toFixed(2)}ms)`);
+
+console.log('\n[2b] Retrieve with Graph RAG (k=1, graphRagHops=2 — doc→entity→other-doc):');
+const r1 = await kb.retrieve(queryEmb, { k: 1, graphRagHops: 2 });
+console.log(`  ${r1.citations.length} citations:`);
+for (const c of r1.citations) {
+  const bridge = c.bridgeEntity ? ` (via ${c.bridgeEntity})` : '';
+  console.log(`    ${(c.source ?? 'vector').padEnd(15)} ${c.documentId.padEnd(14)} score=${c.score.toExponential(2)}${bridge}`);
+}
+console.log(`  explain: ${r1.explain.path.join(' → ')} (${r1.explain.totalLatencyMs.toFixed(2)}ms)`);
+console.log(`  → vector top alone returned auth-spec; Graph RAG added crypto-notes via shared #auth entity`);
 
 console.log('\n[3] Recording feedback (SONA dormant — call is a no-op in v0.1):');
-await kb.recordFeedback(result.queryId, { score: 1, label: 'correct' });
+await kb.recordFeedback(r1.queryId, { score: 1, label: 'correct' });
 console.log(`  feedback recorded (will route to SONA when wired in v0.2)`);
 
 console.log('\n[4] ask() is deferred to LLM milestone:');
@@ -103,4 +119,5 @@ for (const d of after.dormant) console.log(`    ⚠ ${d.name.padEnd(16)} — ${d
 
 console.log('\nClosing.');
 await kb.close();
+await graph.close();
 console.log('Done.');
