@@ -39,7 +39,7 @@ export type {
   IngestReport,
 } from './archetypes/KnowledgeBase.js';
 
-export { AgentMemory } from './archetypes/AgentMemory.js';
+export { AgentMemory, defaultRelationExtractor } from './archetypes/AgentMemory.js';
 export type {
   AgentMemoryOptions,
   AgentMemoryCapabilityConfig,
@@ -47,6 +47,8 @@ export type {
   RecallOptions,
   RecallResult,
   RecalledMemory,
+  RememberReport,
+  RelationExtractor,
 } from './archetypes/AgentMemory.js';
 
 export { GraphReasoner } from './archetypes/GraphReasoner.js';

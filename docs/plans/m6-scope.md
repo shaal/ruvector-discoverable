@@ -194,6 +194,35 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M13.1 outcome (AgentMemory Phase 1A — fifth archetype lands)
+
+`AgentMemory` shipped end-to-end against `@ruvector/core` + optional `@ruvector/sona` + optional `GraphReasoner` + optional `LocalLLM` (M11.2 embedder). Per M13 §6 ratification, all 5 open questions answered along my leans: separate-SONA-by-default with optional `instance` for sharing, both-expose addMemory boundary (LocalLLM.localMemory remains design-deferred), hand-rolled SDK-source hyperbolic Poincaré-ball scorer, M11.2-aligned `MemoryRecord.embedding?: Float32Array`, explicit dormant rows for GNN/Mamba/domain-expansion.
+
+**Project state — fifth archetype with a real backend**:
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| GraphReasoner | 3 | 6 | 4 | 1 | 1 | 0 |
+| KnowledgeBase | 6 | 4 | 3 | 0 | 1 | 0 |
+| TimeSeriesMemory | 5 | 5 | 4 | 0 | 1 | 0 |
+| LocalLLM | 3 | 9 | 3 | 3 | 0 | 3 |
+| **AgentMemory** | **7** | **5** | **3** | **0** | **2** | **0** |
+| **Total** | **24** | **29** | **17** | **4** | **5** | **3** |
+
+When the demo wires `sona: true`, `graphReasoner`, `hyperbolic: true` (but no embedder), AgentMemory's value report shows: 7 active (vectorRecall/vectorInsert/agentScoping/health/metrics/sona/hyperbolic), 5 dormant (graphMemory now active when wired so it's also in the active set; corrected: with all 3 opt-ins wired, **8** active, **4** dormant — see actual demo output). The 3 upstream-binding entries (gnnLearning + mambaRecall + domainExpansion) reprobe-track to flip when upstream publishes.
+
+**Live probe-design bug caught by the demo**, fixed inline before commit. First-pass `graphMemory` probe asserted "B must appear with `source: 'graph-adjacent'`" — failed under Finding B shared-state pollution because the user's own memories ranked alongside the probe's, putting all 3 probe memories in `seen` before graph fan-out ran. Fixed by splitting into two assertions: a load-bearing structural test via `kHopNeighbors` directly on the graph (tests the relation invariant), plus a softer recall test asserting B is in records (any source) AND C is NOT in records as `source: 'graph-adjacent'` (tests the SDK contract — graph fan-out doesn't bridge unrelated memories). Same probe-robustness lesson as M11.2's KB autoEmbed: when shared state can pull arbitrary records into vector results, assertions on relative source-attribution need explicit shared-state acknowledgment.
+
+**Hand-rolled Poincaré-ball distance scorer ships as `source: '@ruvector/sdk'`** — second SDK-source capability in the project (parallel to M10.1's changepoint detector). Tier-3 probe synthesizes a hierarchy (root, near-child, far-sibling) and asserts `dChild < dFar`. Numerically robust via clip-to-(1-ε) for the boundary and `Math.max(arg, 1)` for arcosh's domain. v0.2 work-items: a Poincaré-projection helper for callers passing un-normalized embeddings; recency-mix implementation (currently named-but-no-op).
+
+**M11.2 helper extraction now ratifies with archetype #4 of the pattern** (KB, TSM, GR, AgentMemory all use optional embedder + optional Float32Array fast-path + dim validation). Per the M8.2 three-archetype-then-extract precedent, the `_resolveEmbeddings` extraction is overdue. Logged as concrete v0.2 work-item.
+
+**Two cross-archetype questions resolved** in the M13.1 implementation, not just deferred:
+- Q1 (shared SONA): the constructor accepts `sona: { instance: NativeSonaBackend }` for sharing; default is to construct a fresh instance. `close()` only closes the SONA backend when `_ownsSona === true`. Surface tested via type-check; runtime not yet exercised in a demo.
+- Q2 (localMemory boundary): AgentMemory owns its own memory API via `core` directly. `RuvLLM.addMemory/searchMemory` remain in LocalLLM's design-deferred catalog row.
+
+**Five archetypes implemented; one M5-frozen-stub remains** (AgentFramework). Next substantive archetype scoping: M14 — AgentFramework, with the same M11→M12→M13 lessons applied up front.
+
 ## Update — M13 scoping (AgentMemory; 2 of 5 named bindings actually published)
 
 `docs/plans/m13-scope.md` filed. AgentMemory's headline `gnnLearning` differentiator (per M4 ratification) is **gated on `@ruvector/gnn-node` which remains unpublished** — same shape as M11's pre-Phase-1 LocalLLM situation. Re-probed via `tools/reprobe-bindings/reprobe.mjs` first (M11.3+v0.2 lesson applied up front); 0 drift since M12.5.

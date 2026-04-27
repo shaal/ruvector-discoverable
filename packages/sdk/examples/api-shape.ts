@@ -74,15 +74,29 @@ async function exerciseKnowledgeBase(_backend: BackendSpec): Promise<void> {
 
 async function exerciseAgentMemory(): Promise<void> {
   const mem: AgentMemory = await pending();
+  // M13.1 Phase 1A: dimensions required (vector recall over @ruvector/core);
+  // sona / graphReasoner / embedder / hyperbolic optional opt-in.
   await AgentMemory.create({
     agentId: 'planner-1',
-    capabilities: { sona: true, ewc: true, hyperbolic: 'auto' },
+    dimensions: 768,
+    sona: true,
+    hyperbolic: true,
+    capabilities: { sona: true, ewc: true, hyperbolic: true },
   });
-  await mem.remember({ text: 'user prefers concise responses', importance: 0.7, tags: ['preferences'] });
-  const recall: RecallResult = await mem.recall('what does the user prefer?', { k: 16, recency: 0.3 });
+  await mem.remember({
+    text: 'user prefers concise responses',
+    embedding: new Float32Array(768),
+    importance: 0.7,
+    tags: ['preferences'],
+  });
+  const recall: RecallResult = await mem.recall(new Float32Array(768), { k: 16, recency: 0.3 });
   void recall.records[0]?.score;
+  void recall.records[0]?.source;
+  void recall.records[0]?.bridgeTag;
   await mem.recordFeedback(fakeQueryId, { score: -1, label: 'irrelevant' });
   await mem.forget('mem-42');
+  void await mem.healthCheck();
+  void await mem.len();
   await mem.close();
 }
 
