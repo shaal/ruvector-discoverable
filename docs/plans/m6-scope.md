@@ -194,6 +194,25 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M11 scoping (LocalLLM; my M6 claim about ruvllm was wrong)
+
+`docs/plans/m11-scope.md` is the LocalLLM scoping report. The headline correction:
+
+**M6 v0.1's scoping said `ruvllm has no NAPI binding in the repo or on npm`. That was incorrect.** Re-probed during M11 scoping: `@ruvector/ruvllm@2.5.4` + `@ruvector/ruvllm-darwin-arm64@2.0.1` are published, the binary is 838 KB of real Rust, and the umbrella's `RuvLLM` class loads via CJS with 14 working methods.
+
+What works out-of-the-box on the NAPI path:
+- `embed("hello world")` → real 768-dim Float32Array
+- `similarity("apple pie", "fruit dessert")` → 0.987
+
+What needs a model file (default-construct produces gibberish, same Cypher-stub failure mode):
+- `generate(...)`, `query(...)`, `route(...)`
+
+Re-probed *other* unpublished bindings during the same session — `attention-node`, `gnn-node`, `diskann-node`, `solver-node`, `sparsifier-node`, `mincut-gated-transformer-node` — all confirmed still unpublished. So only the ruvllm claim was outdated; M9.1's dormant classification of the others remains accurate.
+
+**Process lesson**: I should have re-probed before committing M9.1's classification. A periodic re-probe script (`npm view <pkg> version` for every dormant `upstream-binding` entry, ~30 LOC) would catch this kind of slip earlier. **Recommendation tracked as M11 open question #4.**
+
+**Issue #02 should be updated** to add `@ruvector/ruvllm@2.5.4` as the third broken-umbrella sample (its ESM build fails with the same `Cannot find module 'dist/esm/...'` defect as `ruvector` and `@ruvector/sona`). Three samples confirms a publishing-pipeline pattern, not three independent oversights.
+
 ## Update — M10.2 outcome (upstream issues authored)
 
 With `sdk-integration` empty, the next-highest-leverage move was externalizing what the SDK's diagnostic infrastructure had already discovered. Four paste-ready upstream bug reports authored in `docs/upstream-issues/`:
