@@ -194,6 +194,34 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M16 outcome (README + getting-started ships; PRD §10 success metric testable)
+
+`packages/sdk/README.md` shipped — 328-line top-of-funnel doc covering the 7 required sections per the M16 ship-task spec: SDK premise + 6-archetype value, install + Node requirements, 30-second KB+LocalLLM autoEmbed example, 3 CLI subcommand walkthroughs, Known gaps table linking all 7 upstream issues, self-describing-roadmap callout with code snippet + `reprobe.mjs` invocation, link to milestone history.
+
+PRD §10's success metric is now testable: a new developer following the README should reach a non-trivial query (`KnowledgeBase.retrieve('how do tokens get rotated?')`) in ≤15 minutes. The 30-second example is the load-bearing path — copy-pasteable end-to-end.
+
+**Caught two inline factual errors and fixed them during the write**:
+- The 30-second example's `getValueReport` summary mock said "7 of 10 active. 3 dormant" — actual breakdown for KB with only `embedder` wired (no graph, no sona) is 5 active / 5 dormant (3 upstream-binding + 2 sdk-integration). Fixed to match reality.
+- Initial draft cited Issue #02 as the reason `@ruvector/core` isn't on npm — Issue #02 is actually about broken umbrella packages (a different upstream defect). Fixed to "a publication gap distinct from the seven tracked upstream issues."
+
+**Caught two doc gaps not in scope to fix this milestone** (logged as v0.2 work-items):
+- No `LICENSE` file at repo root despite `package.json` declaring MIT. README initially linked `../../LICENSE`; dropped the broken link, kept the MIT attribution. v0.2: add `LICENSE` file.
+- README assumes `npm install @ruvector/sdk` works; the SDK is pre-publish. Status line says "pre-1.0" but the install section reads as if the package is live. v0.2: add a "Status (v0.1 — pre-publish)" callout near the top.
+
+**No SDK code changes**; documentation-only deliverable. The 7 archetype demos remain byte-stable (no diff captured because no source code changed; verified by running `npm run verify` clean post-commit).
+
+**v1.0 narrative now COMPLETE for the SDK product**:
+- 6 archetypes implemented.
+- 3 of 3 CLI subcommands shipped (recommend / doctor / audit).
+- 7 paste-ready upstream issues.
+- Self-correcting reprobe (22 npm + 1 CLI tracked).
+- 4-blocker classification surfaced at 7 user-facing layers.
+- 2 SDK-source capabilities (changepoint, hyperbolic).
+- 8 cross-archetype DI couplings across 4 archetype pairs.
+- Top-of-funnel README that covers PRD §10's success metric.
+
+The next substantive milestone (M17+) would shift to PRD §5.1's 3-backend transport story (only `native` ships today; `wasm` and `http` remain) or to v0.2 polish (LICENSE file, pre-publish callout, `--strict` flag for audit, `_meta.workload` auto-injection helper, per-archetype getting-started recipes).
+
 ## Update — M15.3 outcome (`audit` ships; CLI three-subcommand surface CLOSED)
 
 `packages/sdk/src/cli/audit.ts` ships. Third and final CLI subcommand. **PRD §5.5's three-subcommand surface (`recommend` + `doctor` + `audit`) is fully delivered.**
