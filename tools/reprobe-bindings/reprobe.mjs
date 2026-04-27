@@ -166,6 +166,11 @@ const CLI_PROBE_TIMEOUT_MS = 10_000;
 //   1. Drop a script at tools/reprobe-bindings/probes/NN-name.mjs
 //   2. Add an entry below
 //   3. Run reprobe; verify it shows "✓ expected" (or "✓ expected-hang")
+// Probes that exit with code 64 are treated as 'skipped' rather than drift —
+// e.g., the binding-not-available case. Mirrors GNU's "EX_USAGE" sentinel
+// approach: a specific exit code conveys a structured outcome to the runner.
+const PROBE_EXIT_SKIPPED = 64;
+
 const BINDING_METHOD_PROBES = [
   {
     name: 'graph-node-cypher-stub',
@@ -174,6 +179,22 @@ const BINDING_METHOD_PROBES = [
     timeoutMs: 10_000,
     timeoutIsExpected: false,
     notes: 'Cypher engine stub in @ruvector/graph-node@2.0.x. Drift = upstream wired Cypher; flip GraphReasoner.cypher dormant→active.',
+  },
+  {
+    name: 'core-dimension-singleton',
+    issue: '#03',
+    scriptPath: 'tools/reprobe-bindings/probes/03-core-dimension-singleton.mjs',
+    timeoutMs: 10_000,
+    timeoutIsExpected: false,
+    notes: '@ruvector/core VectorDb pins process-global dimension on first insert. Skipped if RUVECTOR_CORE_BINDING + ruvector/ fallback are both unavailable. Drift = router-style multi-instance isolation now possible under core too.',
+  },
+  {
+    name: 'ruvllm-wrapper-case-rename',
+    issue: '#06',
+    scriptPath: 'tools/reprobe-bindings/probes/06-ruvllm-wrapper-case-rename.mjs',
+    timeoutMs: 15_000,
+    timeoutIsExpected: false,
+    notes: '@ruvector/ruvllm umbrella JS wrapper drops 3-of-6 query fields + 2-of-5 route fields via snake_case→camelCase mismatch. Native populated; wrapper-only defect. Drift = wrapper fixed.',
   },
   {
     name: 'graph-wasm-cypher-stub',
@@ -358,8 +379,12 @@ async function probeCli(entry) {
 //   { status: 'expected',      detail }  — probe exit 0; bug present
 //   { status: 'expected-hang', detail }  — killed by timeout AND
 //                                            timeoutIsExpected=true
-//   { status: 'drift',         detail }  — exit !=0, OR killed when
-//                                            timeoutIsExpected=false
+//   { status: 'skipped',       detail }  — probe exit PROBE_EXIT_SKIPPED (64);
+//                                            prerequisite missing (e.g. binding
+//                                            not on disk). Doesn't count toward
+//                                            drift OR errors.
+//   { status: 'drift',         detail }  — exit !=0 (and !=64), OR killed
+//                                            when timeoutIsExpected=false
 //   { status: 'error',         detail }  — script could not run (missing
 //                                            file, spawn error)
 async function probeBindingMethod(entry) {
@@ -405,6 +430,12 @@ async function probeBindingMethod(entry) {
         resolveResult({ status: 'expected', detail: lastLine || 'exit 0' });
         return;
       }
+      if (code === PROBE_EXIT_SKIPPED) {
+        // Probe declined to run (prerequisite missing, e.g. binding-not-on-disk).
+        // Not drift; not an error. Documented per-probe outcome.
+        resolveResult({ status: 'skipped', detail: lastLine || `exit ${PROBE_EXIT_SKIPPED}` });
+        return;
+      }
       // Non-zero exit. Drift: behavior changed, classification was wrong.
       const detail = lastLine || stderr.trim().split('\n').filter(Boolean).pop() || `exit ${code} signal ${signal ?? '(none)'}`;
       resolveResult({ status: 'drift', detail });
@@ -415,7 +446,7 @@ async function probeBindingMethod(entry) {
 // =====================================================================
 // Main
 // =====================================================================
-console.log('# Upstream re-probe (M11.3 v0.5 — M22: +binding-method probes)\n');
+console.log('# Upstream re-probe (M11.3 v0.5 — M22 + M23: 6 binding-method probes)\n');
 const startedAt = new Date().toISOString();
 console.log(`Probed ${PROBES.length} npm packages + ${CLI_PROBES.length} CLI binaries + ${BINDING_METHOD_PROBES.length} binding-method probes at ${startedAt}.\n`);
 
@@ -475,13 +506,15 @@ console.log('|---|---|---|---|');
 for (const r of bmResults) {
   const o = r.observed;
   const emoji = (o.status === 'expected' || o.status === 'expected-hang') ? '✓'
-    : o.status === 'error' ? '!'
-      : '⚠';
+    : o.status === 'skipped' ? '·'
+      : o.status === 'error' ? '!'
+        : '⚠';
   const detail = (o.detail ?? '').replace(/\|/g, '\\|').slice(0, 110);
   console.log(`| ${emoji} | \`${r.name}\` | ${r.issue} | ${detail} |`);
 }
 const bmDrifts = bmResults.filter((r) => r.observed.status === 'drift');
 const bmErrors = bmResults.filter((r) => r.observed.status === 'error');
+const bmSkipped = bmResults.filter((r) => r.observed.status === 'skipped');
 const bmExpected = bmResults.filter((r) => r.observed.status === 'expected' || r.observed.status === 'expected-hang');
 
 const totalDrifts = npmDrifts.length + cliDrifts.length + bmDrifts.length;
@@ -497,7 +530,8 @@ if (totalErrors > 0) {
 }
 
 if (totalDrifts === 0) {
-  console.log(`\n**No drift.** ${PROBES.length - npmErrors.length}/${PROBES.length} npm + ${cliResults.length - cliErrors.length - cliBinaryMissing.length}/${cliResults.length} CLI + ${bmExpected.length}/${BINDING_METHOD_PROBES.length} binding-method probes match expected.`);
+  const bmSkippedSuffix = bmSkipped.length > 0 ? ` (${bmSkipped.length} skipped — prerequisite unavailable)` : '';
+  console.log(`\n**No drift.** ${PROBES.length - npmErrors.length}/${PROBES.length} npm + ${cliResults.length - cliErrors.length - cliBinaryMissing.length}/${cliResults.length} CLI + ${bmExpected.length}/${BINDING_METHOD_PROBES.length} binding-method probes match expected${bmSkippedSuffix}.`);
   console.log('Suggested cadence: re-run at every milestone close, or quarterly.');
   process.exit(totalErrors > 0 ? 1 : 0);
 }

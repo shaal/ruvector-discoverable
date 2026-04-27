@@ -194,6 +194,112 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M23 outcome (reprobe v0.5: +Issues #03 + #06 binding-method probes; 'skipped' status added)
+
+Brings reprobe's binding-method probe coverage from 4 to **6 of 11**
+paste-ready upstream issues. The remaining 5 (#02 / #04 / #05 / #07 /
+#08) are either npm-publication-status (already covered by PROBES) or
+not directly probeable in a subprocess (correctness/shape issues that
+need stateful interaction). M23 brings reprobe to maximum useful coverage
+for the runtime-defect class.
+
+**Implementation** (~110 LOC: 2 probes + runner extension):
+
+- `tools/reprobe-bindings/probes/03-core-dimension-singleton.mjs` —
+  Issue #03. Constructs two VectorDbs at different dims (4 + 8), inserts
+  into each, exits 0 if the second insert throws "Dimension mismatch"
+  (bug present), exits 1 if both succeed (drift, bug fixed). Auto-
+  resolves the binding via env var OR in-repo fallback at
+  `<REPO_ROOT>/ruvector/npm/core/platforms/<platform>/ruvector.node`.
+  Exits 64 ('skipped') when neither path is available — relevant in CI
+  without the upstream clone.
+- `tools/reprobe-bindings/probes/06-ruvllm-wrapper-case-rename.mjs` —
+  Issue #06. Constructs RuvLLM, calls query("test") and route("test"),
+  enumerates which of the 6 expected query fields and 5 expected route
+  fields come back undefined. Exits 0 if any are missing (bug present;
+  defaults to 3-of-6 missing on query, 2-of-5 on route per the
+  documented mismatch); exits 1 if all populated (drift, wrapper fixed).
+  Skips with exit 64 when `isNativeLoaded()` returns false (JS fallback
+  mode — Issue #06 is wrapper-over-native, can't probe in fallback).
+- `BINDING_METHOD_PROBES` array extended with 2 new entries.
+- New runner status `'skipped'` (exit code 64): not counted as drift,
+  not counted as error. Probes can declare prerequisites and bow out
+  cleanly; reprobe summary reports "N/M match expected (K skipped —
+  prerequisite unavailable)".
+- New `PROBE_EXIT_SKIPPED = 64` sentinel (mirroring GNU's `EX_USAGE`
+  pattern of conveying structured outcomes via exit codes).
+- Status emoji extended: `·` for skipped (alongside `✓` expected /
+  `⚠` drift / `!` error).
+- Banner bumped to "M11.3 v0.5 — M22 + M23: 6 binding-method probes".
+
+**Drift-by-inversion verified twice**:
+
+1. **Probe-level inversion** (drift detection): flipped the
+   `secondInsertThrew` polarity in probe 03's assertion (`if (!X)` →
+   `if (X)`). Reprobe correctly fired `⚠ Drift detected (1)`, exit 1,
+   with the binding-method drift block printing the right action message
+   for Issue #03. Restored cleanly.
+
+2. **Runner-level inversion** (skipped status routing): forced
+   `process.exit(64)` unconditionally at the top of probe 03. Reprobe
+   correctly classified as `·` glyph, summary line "5/6 match expected
+   (1 skipped — prerequisite unavailable)", overall exit 0 (skipped
+   does not contribute to drift OR error counts). Restored cleanly.
+
+**Live coverage now**:
+
+| # | Issue | Probe | Status |
+|---|---|---|---|
+| 01 | graph-node Cypher stub | `01-graph-node-cypher-stub.mjs` | ✓ M22 |
+| 02 | broken umbrella publish | (npm-publication-status — covered by PROBES) | n/a |
+| 03 | core dimension singleton | `03-core-dimension-singleton.mjs` | ✓ **M23** |
+| 04 | sona microlora warmup | (correctness/shape — not probeable in subprocess) | n/a |
+| 05 | no model-loading API | (would require model file fetch + correctness — out of scope) | n/a |
+| 06 | ruvllm wrapper case-rename | `06-ruvllm-wrapper-case-rename.mjs` | ✓ **M23** |
+| 07 | rvagent-* unpublished | (npm-publication-status — covered by PROBES) | n/a |
+| 08 | server/cluster broken-publish | (npm-publication-status — covered by PROBES) | n/a |
+| 09 | graph-wasm Cypher stub | `09-graph-wasm-cypher-stub.mjs` | ✓ M22 |
+| 10 | ruvllm-wasm no-inference | `10-ruvllm-wasm-no-inference.mjs` | ✓ M22 |
+| 11 | router delete deadlock | `11-router-delete-deadlock.mjs` | ✓ M22 |
+
+6 of 11 issues have direct binding-method probes; 3 of 11 are covered
+by the existing publication-status PROBES; the remaining 2 (#04, #05)
+are correctness/setup defects that don't lend themselves to single-
+script subprocess probes.
+
+**Caught live**:
+- Probe 06's first-call latency was higher than expected (~2s for
+  RuvLLM construction + first query/route). Bumped its `timeoutMs` to
+  15_000 (vs default 10_000) for headroom on slow CI runners.
+- The `dist.fileCount`-based broken-publish detection (M17 ratification)
+  is a sibling of the same "structured exit code conveys outcome" idea
+  — `published-broken` is to npm probes what `'skipped'` (exit 64) is
+  to binding-method probes. Both encode richer-than-binary outcomes.
+
+**Project state after M23**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11), with **6 of 11 directly
+  probed at runtime via reprobe v0.5**
+- `reprobe.mjs` v0.5: 31 npm + 1 CLI + **6 binding-method probes**;
+  subprocess-isolated, SIGKILL-safe, skipped-aware, exit 1 + paste-
+  ready drift block when any tracked defect changes state upstream
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+
+**Next ship-task candidates**:
+- **Documenting the upstream-tracking discipline** in PRD §11 — note
+  that reprobe now monitors 38 distinct upstream signals (32 npm + 1
+  CLI + 6 runtime), making CI a viable "have things changed?" check.
+- **Cross-archetype-DI scoping doc** — additional DI patterns now that
+  v0.3 invariants are ratified.
+- **AgentMemory text persistence to backend** — M21 stores text
+  in-process only.
+
+`docs/upstream-issues/README.md` references unchanged (M23 surfaced no
+new upstream issues — extends monitoring of the existing 11).
+
 ## Update — M22 outcome (reprobe v0.5: subprocess-isolated binding-method probes)
 
 The diagnostic-infrastructure-as-bug-report-evidence-infrastructure soft
