@@ -28,6 +28,16 @@ This is the core operating constraint. Every milestone decision should be checke
 3. **Trust observed status over declared status.** Catalog rows declare a default `active`/`dormant`; tier-1 binding probes and tier-3 archetype probes override the declared status with what the live binding does. When upstream fixes a stub, the SDK reclassifies automatically (M6.2 / M11.3 self-correcting-classification pattern). Hand-maintained dormant lists rot; observed ones don't.
 4. **The diagnostic infrastructure is the bug-report-evidence infrastructure.** Every paste-ready issue under `docs/upstream-issues/` was authored by lifting probe diagnostics verbatim into the issue body. No editorial rewriting; the SDK's `[observed via probe '...', status=broken] ...` strings ARE the upstream evidence.
 
+### Multi-archetype DI invariants *(ratified M20, 2026-04-27)*
+
+The SDK supports wiring multiple archetypes in a single process with cross-archetype DI (LocalLLM as `embedder`, GraphReasoner as `graphReasoner`, etc). Two transport-level invariants govern multi-archetype scenarios:
+
+1. **Dimension co-existence under `nativePackage: 'router'`.** The 3 KB-family archetypes (KnowledgeBase / TimeSeriesMemory / AgentMemory) constructed in the same process with **different dimensions** (e.g., KB at 768, TSM at 8, AgentMemory at 768) coexist correctly. `@ruvector/router` does NOT share `@ruvector/core`'s Issue #03 dimension-singleton; live-verified at M18 (`router-kb` adapter cross-VectorDb test) and M20 (`v03-publish-ready-demo`). Under `nativePackage: 'core'`, the same multi-dim setup throws `Dimension mismatch: expected N, got M` from the second VectorDb construction.
+
+2. **Transport-mixed DI is allowed.** A consumer can wire LocalLLM (default native) + GraphReasoner (default native) + KB-family archetypes (`nativePackage: 'router'`) in one process. The cross-archetype DI fields (`embedder`, `graphReasoner`, `sona`, `llm`) carry archetype instances; the underlying transport of each is independent. The canonical demo at `packages/sdk/examples/v03-publish-ready-demo/run.mjs` validates this end-to-end.
+
+These invariants are load-bearing for the v0.3 publish-ready experience: `npm install @ruvector/sdk @ruvector/router @ruvector/graph-node @ruvector/ruvllm @ruvector/sona` Just Works without `RUVECTOR_CORE_BINDING`.
+
 ### Soft rules
 
 5. **Every commit message names what was caught + fixed live during the work**, so the milestone journal entry can quote it. Pattern shows up in M11.2, M12.1, M13.1, M14.1, M15.2, M15.3, M16, v0.2-polish, M17-scoping.

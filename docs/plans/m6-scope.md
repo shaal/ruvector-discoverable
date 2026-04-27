@@ -194,6 +194,123 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M20 outcome (cross-archetype DI demo on router; v0.3 publish-ready story end-to-end validated)
+
+**The M17.1 / M17.2 / M18 / M19 abstraction holds across the full
+surface.** A single `node examples/v03-publish-ready-demo/run.mjs`
+(without `RUVECTOR_CORE_BINDING`) constructs all 5 archetypes (LocalLLM
++ GraphReasoner + KnowledgeBase + TimeSeriesMemory + AgentMemory) in one
+process, with the 3 KB-family archetypes on `nativePackage: 'router'`,
+**mixing dimensions** (KB at 768, TSM at 8, AgentMemory at 768),
+exercises each end-to-end (KB ingest+retrieve, TSM append+query+
+changepoint, AgentMemory remember+recall+feedback), and closes cleanly.
+
+**This is a consolidation milestone — no new archetype or backend code.
+Just a demo + 2 doc updates that prove the multi-archetype DI story
+works under router.**
+
+**Implementation** (~140 LOC of demo + ~25 lines of docs):
+
+- `packages/sdk/examples/v03-publish-ready-demo/run.mjs` — single-process
+  multi-archetype DI demo. Cross-archetype wiring:
+  - LocalLLM (default native) → embedder DI for KB/TSM/AgentMemory and
+    GraphReasoner
+  - GraphReasoner (default native) → graphReasoner DI for KB and
+    AgentMemory (M9 graphRag, M13.1 graphMemory)
+  - KB at 768 dims via `nativePackage: 'router'` + embedder + graph
+  - TSM at **8 dims** (different from KB!) via `nativePackage: 'router'`,
+    no embedder (raw Float32Array values) — the load-bearing
+    multi-dimension test
+  - AgentMemory at 768 dims via `nativePackage: 'router'` + embedder + graph
+- `packages/sdk/README.md` — M20 callout pointing at the demo as the
+  canonical "v0.3 looks like end-to-end" reference.
+- `CLAUDE.md` — new "Multi-archetype DI invariants" section codifying
+  the two v0.3 ratified properties: (1) dimension co-existence under
+  `nativePackage: 'router'`, (2) transport-mixed DI is allowed.
+
+**Drift-by-inversion verified live**: temporarily flipped TSM's
+construction to default `'core'` (with no env var set). Demo correctly
+fails with `BINDING_PATH_REQUIRED` thrown from `NativeCoreBackend.create`
+at the TSM step (step [4/5] of the demo). The error trace points at
+`TimeSeriesMemory.create → NativeCoreBackend.create → resolveBindingPath`.
+This proves M19's propagation is what makes step 4 work without an env
+var; without it, the demo fails at exactly the boundary between M18
+(KB ratified) and M19 (TSM/AgentMemory ratified). Restored cleanly.
+
+**Caught live**:
+- AgentMemory's `recall()` returns records whose `text` field is a
+  placeholder ("(text not stored in v0.1 — supply via metadata)"). The
+  M20 demo initially logged this verbatim, which obscured the
+  semantic-correctness signal. Fixed by maintaining a local
+  `Map<id, text>` in the demo and looking up the original text by id
+  for display. Lesson: AgentMemory's text-storage gap (v0.1) hits
+  any consumer demoing recall results; might be worth a v0.4
+  archetype-level fix to actually persist the text alongside the
+  embedding.
+- The model's short-text embedding clustering: all 4 AgentMemory
+  recall scores fall in 0.0028–0.0071 (very tight cluster), and the
+  semantic ordering doesn't intuitively match "what does the user
+  prefer?" → the top hit is "EST timezone" rather than "dark mode."
+  This is the upstream `@ruvector/ruvllm` model's known low-quality-
+  short-text-embedding behavior (related to Issue #05's
+  no-model-loading defect). Out of M20 scope; demo's role is to
+  validate plumbing, not model quality.
+- The changepoint detector reports 5 changepoints across t+8…t+12min
+  for the t+10min step shift, not 3 as the comment originally
+  claimed. The rolling-window detector legitimately fires across
+  multiple windows that span the transition. Comment corrected
+  inline.
+
+**M8.2**: no native-archetype demos affected (M20 is purely additive
+— a new demo, no source-code changes). All M18/M19 router demos still
+pass exit 0 (kb-router, tsm-router, am-router). All earlier demos
+unaffected.
+
+**Multi-archetype DI invariants codified in CLAUDE.md** as v0.3-ratified
+operating principles:
+1. **Dimension co-existence under router**: KB+TSM+AgentMemory at
+   different dims coexist in one process. Live-verified at M18 (cross-
+   VectorDb test) and M20 (full demo).
+2. **Transport-mixed DI**: a consumer can wire native-transport
+   archetypes (LocalLLM, GraphReasoner) AS embedder/graphReasoner DI
+   into router-transport archetypes (KB-family). The DI fields carry
+   archetype instances; underlying transports are independent.
+
+**Reprobe**: 31/31 npm + 1/1 CLI clean (no upstream-surface contract
+changes; M20 doesn't touch reprobe).
+
+**Project state after M20**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- **All 3 KB-family archetypes fully publish-ready** under
+  `nativePackage: 'router'`
+- **End-to-end v0.3 demo passes** without `RUVECTOR_CORE_BINDING`,
+  exercising all 5 archetypes simultaneously with mixed dimensions
+- 11 paste-ready upstream issues (#01–#11)
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+  (native + WASM)
+- v0.4 reprobe (31 npm + 1 CLI)
+- The v0.3 publish-ready story is **closed** — the SDK ships a
+  working multi-archetype DI experience without the env-var
+  workaround.
+
+**Next ship-task candidates**:
+- **M17.3**: HTTP transport — blocked on Issue #08 republish.
+- **`reprobe.mjs` v0.5**: surface-contract probes for binding-method
+  defects (Issue #11 deadlock detection without hanging reprobe;
+  router's fileCount-based broken-publish detection extended to
+  surface methods).
+- **AgentMemory text storage v0.4**: persist the user-supplied text
+  alongside the embedding rather than the placeholder string. M20
+  surfaced this as a real-demo paper-cut.
+- **Cross-archetype-DI scoping doc**: now that the v0.3 invariants
+  are ratified, scope what additional DI patterns make sense
+  (TSM↔KB time-windowed retrieval; AgentMemory↔KB knowledge-grounded
+  recall; etc.).
+
+`docs/upstream-issues/README.md` references unchanged (M20 surfaced
+no new upstream issues).
+
 ## Update — M19 outcome (router transport propagated to TSM + AgentMemory; KB-family fully publish-ready)
 
 The M18 dispatcher pattern propagated cleanly to the other two NAPI-core-
