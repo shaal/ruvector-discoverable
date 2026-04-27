@@ -4,3 +4,7 @@ target/
 dist/
 .DS_Store
 *.log
+# Upstream @ruvector/core writes to a default file when storagePath is omitted.
+# Documented in m6-scope.md as Finding C; works around by ignoring artefacts.
+*.db
+*.rvf

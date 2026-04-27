@@ -194,6 +194,27 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M7 v0.1 outcome (KnowledgeBase + second-archetype validation)
+
+The catalog/probe pattern from M6.2 ports to a second archetype with no source-level changes. `KnowledgeBase` (wired to `@ruvector/core` via the in-repo prebuilt binary) uses an identically-shaped `CAPABILITY_CATALOG`, an identically-shaped `getValueReport` reducer, and an identically-shaped `introspect`. Both archetypes' value reports now read the same way: `source`, `lastHealthCheckAt`, `[observed via probe ...]` dormant strings.
+
+Two upstream findings the smoke check caught on first run:
+
+**Finding A — `@ruvector/core` VectorDb dimension singleton.** `new VectorDb({dimensions: N})` rejects subsequent inserts at non-N dimensions across instances created later. Cause: the binding caches dimensions on the first construction. Mitigation: smoke check accepts a `dimensions` parameter and sizes the probe to the user's KB dimensions; archetype passes its own dimensions through.
+
+**Finding B — `@ruvector/core` VectorDb shared state.** `new VectorDb()` does not isolate instances; multiple constructions in the same Node process share a backing store. Probe inserts therefore pollute the user's `len()` and (less concerningly) the user's index. Mitigations:
+1. Probe assertions are deltas (`len_after - len_before == 1`), not absolutes.
+2. Probe IDs use a private prefix (`__ruvsdk_probe_*`) and are best-effort deleted at the start AND end of the smoke check.
+3. Documented loudly so users know `healthCheck()` is a destructive read against shared state.
+
+**Finding C — `@ruvector/core` writes to disk by default.** Constructing `new VectorDb({dimensions, distanceMetric})` without an explicit `storagePath` creates a default `ruvector.db` file in the current working directory rather than running in-memory. Combined with Finding B, this means state actually persists across Node processes too, not just within one. Mitigations:
+1. SDK `.gitignore` excludes `*.db` and `*.rvf` so accidental persistence doesn't get committed.
+2. v0.2 should pass an explicit ephemeral path to the binding when the user requests in-memory mode, then clean it up on close. Or, ideally, upstream adds an explicit in-memory mode.
+
+Both findings are real upstream quirks worth filing. Both are handled cleanly by the same observe-and-classify pattern that handles Cypher's stub.
+
+Catalog duplication: two ~80-line `CAPABILITY_CATALOG` arrays now live in `archetypes/GraphReasoner.ts` and `archetypes/KnowledgeBase.ts`. Pure copy-paste, drift-prone. v0.2 should extract a shared module — but the M7 v0.1 deliberate scope cap is to **wait for a third archetype** before committing to a shared shape. Two data points isn't enough to lock in the abstraction.
+
 ## Update — M6.2 outcome (value report → observation)
 
 The v0.2 wiring item from M6.1 has shipped:

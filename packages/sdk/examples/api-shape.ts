@@ -9,7 +9,7 @@
  */
 
 import {
-  KnowledgeBase, type Answer,
+  KnowledgeBase, type RetrieveResult,
   AgentMemory, type RecallResult,
   GraphReasoner, type CypherResult,
   TimeSeriesMemory, type TemporalResult,
@@ -30,34 +30,45 @@ function pending<T>(): Promise<T> {
 // Cast helper for the QueryId branded type. In real use this comes from an Answer.
 const fakeQueryId = 'q-123' as QueryId;
 
-async function exerciseKnowledgeBase(backend: BackendSpec): Promise<void> {
+async function exerciseKnowledgeBase(_backend: BackendSpec): Promise<void> {
   const kb: KnowledgeBase = await pending();
-  void backend;
 
   await KnowledgeBase.create({
-    source: './docs/**/*.md',
-    backend,
+    dimensions: 4,
+    distanceMetric: 'Cosine',
     storage: './kb.rvf',
-    embedder: { provider: 'auto' },
-    capabilities: { hybrid: true, graphRag: true, sona: true, matryoshka: 'auto' },
+    bindingPath: './ruvector.node',
+    capabilities: { hybrid: true, graphRag: true, sona: true },
   });
 
-  const answer: Answer = await kb.ask('how does our auth flow work?', { k: 8 });
-  const explain: ExplainTrace = answer.explain;
-  void explain.path[0];
-  void answer.citations[0]?.passage;
-  void answer.queryId;
+  // M7 v0.1: ingest requires pre-computed embeddings; ask() is not implemented.
+  await kb.ingest([
+    { id: 'd1', text: 'auth flow doc', embedding: new Float32Array([1, 0, 0, 0]), metadata: { topic: 'auth' } },
+  ]);
 
-  await kb.ingest('./more-docs/');
-  await kb.recordFeedback(answer.queryId, { score: 1, label: 'correct' });
+  const result: RetrieveResult = await kb.retrieve(new Float32Array([1, 0, 0, 0]), { k: 8 });
+  const explain: ExplainTrace = result.explain;
+  void explain.path[0];
+  void result.citations[0]?.documentId;
+  void result.citations[0]?.score;
+  void result.queryId;
+
+  await kb.recordFeedback(result.queryId, { score: 1, label: 'correct' });
 
   const report: ValueReport = await kb.getValueReport();
   for (const a of report.active) void a.invocations;
   for (const d of report.dormant) void d.enable;
+  void report.healthSource;
+  void report.lastHealthCheckAt;
 
   const pipe: Pipeline = kb.introspect();
   void pipe.archetype;
   void pipe.capabilities[0]?.active;
+
+  const health = await kb.healthCheck();
+  void health.summary;
+
+  void await kb.len();
   await kb.close();
 }
 

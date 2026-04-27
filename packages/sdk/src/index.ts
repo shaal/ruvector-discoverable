@@ -27,8 +27,9 @@ export { KnowledgeBase } from './archetypes/KnowledgeBase.js';
 export type {
   KnowledgeBaseOptions,
   KnowledgeBaseCapabilityConfig,
-  EmbedderConfig,
   Document,
+  RetrieveOptions,
+  RetrieveResult,
   AskOptions,
   Filter,
   Answer,
