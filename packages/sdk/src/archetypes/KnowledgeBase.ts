@@ -31,9 +31,10 @@
 import type { ExplainTrace } from '../core/explain.js';
 import type { FeedbackProvider, FeedbackSignal, QueryId } from '../core/feedback.js';
 import type { Pipeline } from '../core/pipeline.js';
-import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
+import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
-import { NotImplementedError, RuVectorError, runCheck, summarize } from '../core/index.js';
+import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
+import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 
 // ---------------- Public types ----------------
@@ -123,21 +124,9 @@ export interface Answer {
 }
 
 // ---------------- Capability catalog ----------------
-// Same shape as GraphReasoner's catalog (M6.2). Kept as a separate copy in
-// v0.1 — extracting a shared module is itself a v0.2 concern that should
-// happen only after we've seen the pattern survive multiple archetypes.
-
-type CapabilityCatalogEntry = {
-  readonly name: string;
-  readonly source: string;
-  readonly adrs?: readonly string[];
-  readonly probeName?: string;
-  readonly defaultStatus: 'active' | 'dormant';
-  readonly defaultDormantReason?: string;
-  readonly defaultDormantLift?: string;
-  readonly defaultDormantEnable?: string;
-  readonly invocationKey?: string;
-};
+// Reducer logic lives in core/capability-catalog.ts (extracted in M8.2 once
+// three archetypes confirmed the shape). This file holds only the data:
+// which capabilities the archetype claims and what to say about them.
 
 const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
   {
@@ -370,93 +359,18 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   }
 
   async getValueReport(): Promise<ValueReport> {
-    const inv = (key: string | undefined) => (key ? this._invocationCounts.get(key) ?? 0 : 0);
-    const lastChecks = this._lastHealth?.checks ?? [];
-    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
-
-    const active: ActiveCapability[] = [];
-    const dormant: DormantCapability[] = [];
-    let probedCount = 0;
-    let unprobedCount = 0;
-
-    for (const cap of CAPABILITY_CATALOG) {
-      const probe = cap.probeName ? probesByName.get(cap.probeName) : undefined;
-      const isObserved = probe !== undefined;
-      if (isObserved) probedCount++;
-      else unprobedCount++;
-
-      const observedActive = probe?.status === 'ok';
-      const observedDormant = probe && probe.status !== 'ok';
-      const isActive = observedActive || (!observedDormant && cap.defaultStatus === 'active');
-
-      if (isActive) {
-        active.push({
-          name: cap.name,
-          source: cap.source,
-          invocations: inv(cap.invocationKey),
-          ...(cap.adrs && { adrs: cap.adrs }),
-        });
-        continue;
-      }
-
-      const reason = observedDormant && probe
-        ? `[observed via probe '${probe.name}', status=${probe.status}] ${probe.detail ?? '(no detail)'}`
-        : (cap.defaultDormantReason ?? 'No reason recorded.');
-      dormant.push({
-        name: cap.name,
-        source: cap.source,
-        reason,
-        expectedLift: cap.defaultDormantLift ?? 'Lift not documented.',
-        enable: cap.defaultDormantEnable ?? 'See archetype documentation.',
-        ...(cap.adrs && { adrs: cap.adrs }),
-      });
-    }
-
-    const healthSource: ValueReport['healthSource'] =
-      probedCount === 0 ? 'declared'
-        : unprobedCount === 0 ? 'observed'
-          : 'mixed';
-
-    const totalCaps = CAPABILITY_CATALOG.length;
-    const sourceTag = healthSource === 'observed' ? 'observed'
-      : healthSource === 'declared' ? 'declared (run healthCheck() for live data)'
-        : `mixed (${probedCount}/${totalCaps} observed)`;
-    const summary = `${active.length} of ${totalCaps} unique capabilities active. ${dormant.length} dormant — ${sourceTag}.`;
-
-    const result: ValueReport = {
-      generatedAt: new Date().toISOString(),
-      active,
-      dormant,
-      summary,
-      healthSource,
-      ...(this._lastHealth && { lastHealthCheckAt: this._lastHealth.generatedAt }),
-    };
-    return result;
+    return reduceValueReport({
+      catalog: CAPABILITY_CATALOG,
+      lastHealth: this._lastHealth,
+      invocationCounts: this._invocationCounts,
+    });
   }
 
   introspect(): Pipeline {
-    const lastChecks = this._lastHealth?.checks ?? [];
-    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
-    return {
-      archetype: 'KnowledgeBase',
-      stages: CAPABILITY_CATALOG.filter((c) => c.defaultStatus === 'active').map((c) => ({
-        name: c.name,
-        source: c.source,
-        required: false,
-      })),
-      capabilities: CAPABILITY_CATALOG.map((c) => {
-        const probe = c.probeName ? probesByName.get(c.probeName) : undefined;
-        const observedActive = probe?.status === 'ok';
-        const observedDormant = probe && probe.status !== 'ok';
-        const active = observedActive || (!observedDormant && c.defaultStatus === 'active');
-        return {
-          name: c.name,
-          source: c.source,
-          active,
-          ...(c.adrs && { adrs: c.adrs }),
-        };
-      }),
-    };
+    return reduceIntrospect('KnowledgeBase', {
+      catalog: CAPABILITY_CATALOG,
+      lastHealth: this._lastHealth,
+    });
   }
 
   /** Total document count in the index. */

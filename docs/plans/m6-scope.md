@@ -194,6 +194,23 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M8.2 outcome (extract shared reducer; unify introspect semantics)
+
+After three archetypes confirmed the catalog/probe pattern was stable, the duplicated `getValueReport` and `introspect` bodies were extracted into `core/capability-catalog.ts`. Each archetype now keeps only its own data (the `CAPABILITY_CATALOG` array) and state (`_invocationCounts`, `_lastHealth`); the reducer logic lives in one place and is consumed via 5-line delegations.
+
+Net change:
+- ~140 LOC of duplication eliminated (~80 LOC × 3 archetype reducers, replaced by ~10 LOC × 3 delegations + ~140 LOC shared module).
+- Three private copies of `CapabilityCatalogEntry` collapsed to one re-exported type.
+
+Latent bug fixed in passing: `introspect().stages` previously had divergent filters across archetypes — GR used `c => c.probeName` (would include dormant `cypher` because it has a probe!), KB and TSM used `c => c.defaultStatus === 'active'`. Unified to "currently-active capabilities (post-observation overlay)" — `introspect.stages` now exactly matches `getValueReport.active`. Invisible to current demos (none call introspect) but eliminates a latent surprise.
+
+Verification: captured canonical demo output for all three archetypes before the refactor, ran the refactor, captured after. Diff is empty modulo two documented sources of per-run nondeterminism (random probe ID suffixes and upstream's kHop iteration order). Pure-refactor verified by behavior, not just by type-check.
+
+v0.2 work-items still open:
+- Extract `_archetypeProbe` template (tier-3 probes still duplicated; argument shapes vary per archetype, so harder than the reducer extraction was)
+- Add unit tests for the reducer in isolation once the shared module grows complex enough
+- Add `healthCheck: 'on-create'` constructor option
+
 ## Update — M8.1 outcome (tier-3 archetype probes — closing the readiness loop)
 
 The `ms | 0` bug from M8 v0.1 exposed a gap in the smoke-check pattern: it validated the *binding* but not the SDK's logic over the binding. M8.1 closes that gap with archetype-level probes that exercise the SDK's own public API end-to-end.

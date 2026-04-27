@@ -1,4 +1,5 @@
 export * from './backend.js';
+export * from './capability-catalog.js';
 export * from './explain.js';
 export * from './feedback.js';
 export * from './health.js';

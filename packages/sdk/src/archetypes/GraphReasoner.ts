@@ -34,9 +34,10 @@
 import type { BackendSpec } from '../core/backend.js';
 import type { ExplainTrace } from '../core/explain.js';
 import type { Pipeline } from '../core/pipeline.js';
-import type { ActiveCapability, DormantCapability, ValueReport, ValueReportProvider } from '../core/value-report.js';
+import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
-import { NotImplementedError, RuVectorError, runCheck, summarize } from '../core/index.js';
+import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
+import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
 
 // ---------------- Public types ----------------
@@ -138,28 +139,14 @@ export type GraphChangeListener = (change: unknown) => void;
 
 // ---------------- Implementation ----------------
 
-// Static capability catalog — the single source of truth for which capabilities
-// the archetype claims. Each entry declares an a-priori `defaultStatus` (used
-// when no observation is available) plus an optional `probeName` mapping into
-// the smoke-check result (M6.1). When a probe exists and a healthCheck has
-// run, the observed status overrides the declared one.
+// Capability catalog — single source of truth for which capabilities the
+// archetype claims. Each entry's defaultStatus is used when no observation is
+// available; an optional probeName maps into the smoke-check result (M6.1).
+// When a probe exists and a healthCheck has run, the observed status
+// overrides the declared one.
 //
-// Capabilities without a `probeName` (e.g. sublinearPageRank — no published
-// NAPI binding to probe) stay declarative and feed `healthSource = 'declared'`
-// or `'mixed'` accordingly.
-
-type CapabilityCatalogEntry = {
-  readonly name: string;
-  readonly source: string;
-  readonly adrs?: readonly string[];
-  readonly probeName?: string; // matches a CheckResult.name from smokeCheck
-  readonly defaultStatus: 'active' | 'dormant';
-  readonly defaultDormantReason?: string;
-  readonly defaultDormantLift?: string;
-  readonly defaultDormantEnable?: string;
-  /** Maps an `invocationCounts` key to populate `ActiveCapability.invocations`. */
-  readonly invocationKey?: string;
-};
+// The reducer logic that consumes this lives in core/capability-catalog.ts
+// (extracted in M8.2 after three archetypes confirmed the shape was stable).
 
 const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
   {
@@ -394,95 +381,18 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // ----- Cross-cutting -----
 
   async getValueReport(): Promise<ValueReport> {
-    const inv = (key: string | undefined) => (key ? this._invocationCounts.get(key) ?? 0 : 0);
-    const lastChecks = this._lastHealth?.checks ?? [];
-    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
-
-    const active: ActiveCapability[] = [];
-    const dormant: DormantCapability[] = [];
-    let probedCount = 0;
-    let unprobedCount = 0;
-
-    for (const cap of CAPABILITY_CATALOG) {
-      const probe = cap.probeName ? probesByName.get(cap.probeName) : undefined;
-      const isObserved = probe !== undefined;
-      if (isObserved) probedCount++;
-      else unprobedCount++;
-
-      // Decide active vs dormant. Observed > declared.
-      const observedActive = probe?.status === 'ok';
-      const observedDormant = probe && probe.status !== 'ok';
-      const isActive = observedActive || (!observedDormant && cap.defaultStatus === 'active');
-
-      if (isActive) {
-        active.push({
-          name: cap.name,
-          source: cap.source,
-          invocations: inv(cap.invocationKey),
-          ...(cap.adrs && { adrs: cap.adrs }),
-        });
-        continue;
-      }
-
-      // Dormant — prefer the observed diagnostic when we have one.
-      const reason = observedDormant && probe
-        ? `[observed via probe '${probe.name}', status=${probe.status}] ${probe.detail ?? '(no detail)'}`
-        : (cap.defaultDormantReason ?? 'No reason recorded.');
-      dormant.push({
-        name: cap.name,
-        source: cap.source,
-        reason,
-        expectedLift: cap.defaultDormantLift ?? 'Lift not documented.',
-        enable: cap.defaultDormantEnable ?? 'See archetype documentation.',
-        ...(cap.adrs && { adrs: cap.adrs }),
-      });
-    }
-
-    const healthSource: ValueReport['healthSource'] =
-      probedCount === 0 ? 'declared'
-        : unprobedCount === 0 ? 'observed'
-          : 'mixed';
-
-    const totalCaps = CAPABILITY_CATALOG.length;
-    const sourceTag = healthSource === 'observed' ? 'observed'
-      : healthSource === 'declared' ? 'declared (run healthCheck() for live data)'
-        : `mixed (${probedCount}/${totalCaps} observed)`;
-    const summary = `${active.length} of ${totalCaps} unique capabilities active. ${dormant.length} dormant — ${sourceTag}.`;
-
-    const result: ValueReport = {
-      generatedAt: new Date().toISOString(),
-      active,
-      dormant,
-      summary,
-      healthSource,
-      ...(this._lastHealth && { lastHealthCheckAt: this._lastHealth.generatedAt }),
-    };
-    return result;
+    return reduceValueReport({
+      catalog: CAPABILITY_CATALOG,
+      lastHealth: this._lastHealth,
+      invocationCounts: this._invocationCounts,
+    });
   }
 
   introspect(): Pipeline {
-    const lastChecks = this._lastHealth?.checks ?? [];
-    const probesByName = new Map(lastChecks.map((c) => [c.name, c]));
-    return {
-      archetype: 'GraphReasoner',
-      stages: CAPABILITY_CATALOG.filter((c) => c.probeName).map((c) => ({
-        name: c.name,
-        source: c.source,
-        required: false,
-      })),
-      capabilities: CAPABILITY_CATALOG.map((c) => {
-        const probe = c.probeName ? probesByName.get(c.probeName) : undefined;
-        const observedActive = probe?.status === 'ok';
-        const observedDormant = probe && probe.status !== 'ok';
-        const active = observedActive || (!observedDormant && c.defaultStatus === 'active');
-        return {
-          name: c.name,
-          source: c.source,
-          active,
-          ...(c.adrs && { adrs: c.adrs }),
-        };
-      }),
-    };
+    return reduceIntrospect('GraphReasoner', {
+      catalog: CAPABILITY_CATALOG,
+      lastHealth: this._lastHealth,
+    });
   }
 
   /**
