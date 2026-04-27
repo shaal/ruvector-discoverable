@@ -10,6 +10,7 @@
 
 import { runDoctor } from '../dist/cli/doctor.js';
 import { runRecommend } from '../dist/cli/recommend.js';
+import { runAudit } from '../dist/cli/audit.js';
 
 const HELP = `\
 @ruvector/sdk — task-first archetypes over upstream ruvector
@@ -17,7 +18,7 @@ const HELP = `\
 Usage:
   sdk recommend [flags]        Generate a ruvector.config.ts (interactive or non-interactive)
   sdk doctor <config-path>     Introspect a running SDK config and report degradations
-  sdk audit <config-path>      Phase-2 (not yet implemented)
+  sdk audit <config-path>      Compare a config against best-practice for its workload
   sdk --help                   Show this message
 
 recommend flags (omit any to run interactively):
@@ -99,11 +100,25 @@ if (command === 'recommend') {
 }
 
 if (command === 'audit') {
-  process.stderr.write(
-    `sdk audit: Phase-2 (not yet implemented; see docs/plans/m15-scope.md).\n` +
-    `Phase-1A/B ship 'doctor' + 'recommend' only.\n`,
-  );
-  process.exit(2);
+  const configPath = args[1];
+  if (!configPath) {
+    process.stderr.write('sdk audit: missing <config-path>.\nUsage: sdk audit <config-path>\n');
+    process.exit(2);
+  }
+  try {
+    const report = await runAudit({ configPath });
+    // Exit 0 if clean; 1 if any drift was reported (excluding pure
+    // sdk-integration-suggestions, which are advisory). CI can gate on
+    // strict-drift via this exit code.
+    const blockingDrifts = report.drifts.filter((d) => d.kind !== 'sdk-integration-suggestion');
+    process.exit(blockingDrifts.length > 0 ? 1 : 0);
+  } catch (e) {
+    if (e && typeof e === 'object' && 'code' in e) {
+      process.exit(1);
+    }
+    process.stderr.write(`sdk audit: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
 }
 
 process.stderr.write(`sdk: unknown command '${command}'.\n${HELP}`);

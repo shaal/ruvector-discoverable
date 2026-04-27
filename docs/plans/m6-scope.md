@@ -194,6 +194,51 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M15.3 outcome (`audit` ships; CLI three-subcommand surface CLOSED)
+
+`packages/sdk/src/cli/audit.ts` ships. Third and final CLI subcommand. **PRD §5.5's three-subcommand surface (`recommend` + `doctor` + `audit`) is fully delivered.**
+
+**Live demo result** — audit against the M15.1 sample-config (`rag-over-docs`, full DI):
+
+```
+Workload: rag-over-docs  —  "RAG over technical documentation"
+Recommended: LocalLLM + GraphReasoner + KnowledgeBase
+Observed:    LocalLLM + GraphReasoner + KnowledgeBase
+
+⚠ 1 finding:
+    0 missing-archetype, 0 extra-archetype, 0 missing-coupling, 1 sdk-integration-suggestion
+
+  [sdk-integration-suggestion]  KnowledgeBase.sona is dormant [sdk-integration]: ...
+    → await KnowledgeBase.create({ ..., sona: true })
+```
+
+Three drift categories formally surfaced: **missing-archetype** (recommended but absent from `createSdk()`), **extra-archetype** (present but not in workload), **missing-coupling** (archetype wired without its recommended cross-archetype DI — observed via dormant `[sdk-integration]` rows for known-coupling capabilities `autoEmbed`/`graphRag`/`graphMemory`/`llmInvocation`/`kbContext`/`memoryRecall`/`graphReasoning`). Plus advisory `sdk-integration-suggestion` rows that don't block CI but name actionable wins.
+
+**Exit-code policy**: missing/extra/coupling drifts exit 1 (blocking — breaks CI gates); pure sdk-integration-suggestions exit 0 (advisory).
+
+**Drift-by-inversion verified** in two ways: (1) audit a deliberately-incomplete config that claims rag-over-docs but wires only LocalLLM → 2 missing-archetype findings, exit 1; (2) inject a 4th archetype into rag-over-docs's workload table → audit on the unchanged sample-config reports 1 missing-archetype, exit 1. Restoration in both cases returns to clean exit 0.
+
+**The M9.1 four-blocker classification reaches its 7th payoff layer** (was 6 in M15.2): demos → upstream-issue authoring → SDK probe diagnostics → CLI doctor surfacing → CLI doctor suggestions → CLI recommend Skips → **CLI audit drift categories**. One classification investment, seven user-visible payoffs.
+
+**Coupling-quality check uses the value-report's dormant rows as authoritative source**: `KB ← LocalLLM` coupling is "implemented" iff `KB.autoEmbed` is active. The dormant `enable` string flips into the audit's remediation column verbatim — same M11.2/M13.1 surfacing pattern. The audit doesn't inspect private archetype state; it reads what the SDK already exposes.
+
+**`audit-demo.sh` + `audit-test-incomplete-config.ts`** ship as runtime references for downstream users. Demo shows both clean (sample-config) and drifted (incomplete-config) paths.
+
+**M8.2 diff**: all 7 existing archetype demos byte-stable modulo nondeterminism. Audit's 3 new artifacts are pure additions.
+
+**v1.0 narrative now CLOSED on the headline-CLI front**:
+- 6 archetypes implemented.
+- **3 of 3 CLI subcommands shipped** (recommend / doctor / audit).
+- 7 paste-ready upstream issues.
+- Self-correcting reprobe (22 npm + 1 CLI tracked).
+- 4-blocker classification surfaced at 7 distinct user-facing layers.
+- 2 SDK-source capabilities (changepoint, hyperbolic).
+- 8 cross-archetype DI couplings across 4 archetype pairs.
+
+**v0.2 work-items**: `_meta.workload` auto-injection helper for hand-written configs (the audit anchor); coupling-double-emit edge case (low risk; multi-WORKLOAD row archetype + same coupling); `--strict` flag that elevates sdk-integration-suggestions to blocking.
+
+`docs/upstream-issues/README.md` references unchanged from M15.2 (M6 → M14).
+
 ## Update — M15.2 outcome (`recommend` ships; CLI surface complete except audit)
 
 `packages/sdk/src/cli/recommend.ts` + `packages/sdk/src/cli/workloads.ts` ship as Phase-1B. Both interactive and non-interactive paths share the same internal mapper. Per ratified M15 §6: `node:readline` for prompts (no Inquirer); generated TS-module config; data-only workloads table.
