@@ -36,6 +36,7 @@ import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../cor
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import { NativeSonaBackend } from '../backends/native-sona.js';
 import { GraphReasoner } from './GraphReasoner.js';
 
 // ---------------- Public types ----------------
@@ -73,6 +74,22 @@ export interface KnowledgeBaseOptions {
    * real NER pipeline for production use.
    */
   readonly entityExtractor?: EntityExtractor;
+
+  /**
+   * Optional SONA continual-learning configuration (M10 v0.1).
+   *
+   * When supplied, retrieve() begins a SONA trajectory for each query
+   * and warps the query embedding via applyMicroLora before vector
+   * search; recordFeedback() ends the trajectory with the user's reward
+   * signal so SONA learns from feedback.
+   *
+   * The hiddenDim is automatically set to this KB's `dimensions`.
+   *
+   * Set `true` for default config (auto-resolve binding via npm or
+   * RUVECTOR_SONA_BINDING env var), or pass an object for explicit
+   * `bindingPath`.
+   */
+  readonly sona?: true | { readonly bindingPath?: string };
 }
 
 export interface Entity {
@@ -297,15 +314,19 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     name: 'sona',
     source: 'sona',
     adrs: ['ADR-014', 'ADR-044'],
+    probeName: 'sona',
+    invocationKey: 'sonaFeedback',
+    // M10 v0.1: SONA wiring shipped. Default-status remains dormant because
+    // the user must opt in by passing `sona: true` (or a config object) to
+    // KnowledgeBase.create(); when opted in, the tier-3 probe runs and the
+    // observed status flips to ok. Same pattern as graphRag in M9.
     defaultStatus: 'dormant',
-    // sdk-integration: @ruvector/sona@0.1.5 IS published on npm with a
-    // working darwin-arm64 binary (verified in M6 scoping). The SDK just
-    // hasn't wired it into KnowledgeBase yet.
     defaultDormantBlocker: 'sdk-integration',
-    defaultDormantReason: '@ruvector/sona is published on npm but not wired into KnowledgeBase v0.1. ' +
-      'recordFeedback is a no-op until the integration lands.',
+    defaultDormantReason: 'KnowledgeBase was constructed without sona. Pass `sona: true` ' +
+      '(or `sona: { bindingPath: ... }`) at create-time to enable continual learning ' +
+      'via @ruvector/sona. recordFeedback is a no-op when sona is not wired.',
     defaultDormantLift: '10-25% lift on repeat queries via continual learning (LoRA + EWC++).',
-    defaultDormantEnable: 'v0.2 will wire sona; meanwhile the SDK accepts feedback calls and discards them.',
+    defaultDormantEnable: 'await KnowledgeBase.create({ ..., sona: true })',
   },
 ];
 
@@ -315,6 +336,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   private readonly _backend: NativeCoreBackend;
   private readonly _options: KnowledgeBaseOptions;
   private readonly _graph: GraphReasoner | null;
+  private readonly _sona: NativeSonaBackend | null;
   private readonly _entityExtractor: EntityExtractor;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
@@ -323,30 +345,34 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   // Tracks which entities a doc mentions, so retrieve()'s graph fan-out can
   // attribute the bridge entity in `graph-adjacent` citations.
   private _docEntities = new Map<string, readonly string[]>();
+  // queryId → SONA trajectoryId mapping, so recordFeedback can close the
+  // trajectory the retrieve() call opened.
+  private _trajectoryByQuery = new Map<string, number>();
 
-  private constructor(backend: NativeCoreBackend, options: KnowledgeBaseOptions) {
+  private constructor(backend: NativeCoreBackend, options: KnowledgeBaseOptions, sona: NativeSonaBackend | null) {
     this._backend = backend;
     this._options = options;
     this._graph = options.graphReasoner ?? null;
+    this._sona = sona;
     this._entityExtractor = options.entityExtractor ?? defaultEntityExtractor;
   }
 
   static async create(options: KnowledgeBaseOptions): Promise<KnowledgeBase> {
-    if (options.graphReasoner) {
-      // Validate dimensions match. The GraphReasoner stores its dimensions on
-      // its options; we don't have a public getter, so we trust the caller's
-      // construction parameters here. v0.2 should expose a `.dimensions`
-      // getter on GraphReasoner for explicit checking.
-      // (For now, dimension mismatch will surface as a runtime insert error
-      // from @ruvector/graph-node — caught by the tier-3 probe.)
-    }
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
       ...(options.storage !== undefined && { storage: options.storage }),
       ...(options.bindingPath !== undefined && { bindingPath: options.bindingPath }),
     });
-    return new KnowledgeBase(backend, options);
+    let sona: NativeSonaBackend | null = null;
+    if (options.sona !== undefined) {
+      const sonaCfg = options.sona === true ? {} : options.sona;
+      sona = await NativeSonaBackend.create({
+        hiddenDim: options.dimensions,
+        ...(sonaCfg.bindingPath !== undefined && { bindingPath: sonaCfg.bindingPath }),
+      });
+    }
+    return new KnowledgeBase(backend, options, sona);
   }
 
   /**
@@ -418,10 +444,28 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
       );
     }
 
+    // SONA: warp the query embedding via the current LoRA delta before search.
+    // Begin a trajectory whose route is the top citation's docId; trajectory
+    // is closed by recordFeedback() with the user's reward signal.
+    let queryToSearch = queryEmbedding;
+    let sonaTid: number | null = null;
+    let sonaMs = 0;
+    if (this._sona !== null) {
+      const tSona = performance.now();
+      sonaTid = this._sona.beginTrajectory(queryEmbedding);
+      queryToSearch = this._sona.applyMicroLora(queryEmbedding);
+      sonaMs = performance.now() - tSona;
+    }
+
     const tStartVector = performance.now();
-    const hits = await this._backend.search(queryEmbedding, k);
+    const hits = await this._backend.search(queryToSearch, k);
     const vectorMs = performance.now() - tStartVector;
     const citations: Citation[] = hits.map((h) => ({ documentId: h.id, score: h.score, source: 'vector' as const }));
+
+    // SONA: set the route to the top citation, so feedback links query→chosen-doc.
+    if (this._sona !== null && sonaTid !== null && hits.length > 0 && hits[0]) {
+      this._sona.setTrajectoryRoute(sonaTid, hits[0].id);
+    }
 
     // Graph RAG fan-out
     let graphMs = 0;
@@ -462,22 +506,33 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     const total = performance.now() - start;
     this.bump('retrieve');
 
-    const stages: Array<ExplainTrace['stages'][number]> = [
-      { name: 'vectorSearch', source: 'ruvector-core', durationMs: vectorMs, note: `k=${k}, ${hits.length} hits` },
-    ];
-    const capabilities: Array<ExplainTrace['capabilities'][number]> = [
-      { name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null },
-    ];
+    const stages: Array<ExplainTrace['stages'][number]> = [];
+    const capabilities: Array<ExplainTrace['capabilities'][number]> = [];
+    const path: string[] = [];
+    if (this._sona !== null) {
+      stages.push({ name: 'sonaApplyLora', source: 'sona', durationMs: sonaMs, note: `tid=${sonaTid}, query warped via microLoRA` });
+      capabilities.push({ name: 'sona', source: 'sona', estimatedLift: null });
+      path.push('sonaApplyLora');
+    }
+    stages.push({ name: 'vectorSearch', source: 'ruvector-core', durationMs: vectorMs, note: `k=${k}, ${hits.length} hits` });
+    capabilities.push({ name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null });
+    path.push('vectorSearch');
     if (hops > 0) {
       stages.push({ name: 'graphRagFanout', source: 'ruvector-graph', durationMs: graphMs, note: `${hops}-hop fan-out, +${bridgeCount} adjacent` });
       capabilities.push({ name: 'graphRag', source: 'ruvector-graph', estimatedLift: null });
+      path.push('graphRagFanout');
+    }
+
+    const queryId = this.nextQueryId();
+    if (this._sona !== null && sonaTid !== null) {
+      this._trajectoryByQuery.set(queryId, sonaTid);
     }
 
     return {
       citations,
-      queryId: this.nextQueryId(),
+      queryId,
       explain: {
-        path: hops > 0 ? ['vectorSearch', 'graphRagFanout'] : ['vectorSearch'],
+        path,
         stages,
         capabilities,
         totalLatencyMs: total,
@@ -493,11 +548,26 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     );
   }
 
-  recordFeedback(_queryId: QueryId, _signal: FeedbackSignal): Promise<void> {
-    // SONA is dormant in v0.1 — accept the call but discard. The dormant
-    // entry in getValueReport explains this to the developer.
+  async recordFeedback(queryId: QueryId, signal: FeedbackSignal): Promise<void> {
     this.bump('recordFeedback');
-    return Promise.resolve();
+    if (this._sona === null) {
+      // No SONA wired — feedback discarded. Dormant entry in getValueReport
+      // explains this to the developer.
+      return;
+    }
+    const tid = this._trajectoryByQuery.get(queryId);
+    if (tid === undefined) {
+      // Trajectory was already closed (duplicate feedback) or queryId is foreign.
+      // Silently ignore — recording feedback for an unknown query is a no-op,
+      // not an error.
+      return;
+    }
+    this._trajectoryByQuery.delete(queryId);
+    // signal.score is in [-1, 1] per FeedbackSignal contract; pass straight to SONA.
+    this._sona.endTrajectory(tid, signal.score);
+    // Trigger a learning tick so the trajectory contributes ASAP.
+    this._sona.tick();
+    this.bump('sonaFeedback');
   }
 
   async healthCheck(): Promise<HealthCheckResult> {
@@ -511,10 +581,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    // M9: when the user has supplied a graphReasoner, run the Graph RAG
-    // probe against THIS KB instance's graphReasoner. (We don't probe via
-    // a temp instance because creating a temp GraphReasoner would mutate
-    // the user-supplied one's shared backend per Finding B.)
+    // M9: graph-rag probe (when user supplied a graphReasoner).
     const graphRagChecks = this._graph !== null
       ? await this._graphRagProbe()
       : [{
@@ -524,7 +591,24 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
           durationMs: 0,
           tier: 'archetype' as const,
         }];
-    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks, ...graphRagChecks]);
+    // M10: sona probe (when user opted into sona).
+    const sonaProbeChecks = this._sona !== null
+      ? await NativeSonaBackend.smokeCheck({
+          hiddenDim: this._options.dimensions,
+          ...(typeof this._options.sona === 'object' && this._options.sona?.bindingPath !== undefined
+            && { bindingPath: this._options.sona.bindingPath }),
+        })
+      : [{
+          name: 'sona',
+          status: 'unsupported' as const,
+          detail: 'no sona configured at create-time',
+          durationMs: 0,
+          tier: 'archetype' as const,
+        }];
+    // For consumers, we expose a single summary check named `sona` reflecting
+    // the binding-tier probes. If any is broken, sona = broken.
+    const sonaSummary = summarizeSonaProbes(sonaProbeChecks);
+    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks, ...graphRagChecks, sonaSummary]);
     return this._lastHealth;
   }
 
@@ -691,4 +775,39 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     this._idCounter++;
     return `kb-q-${Date.now()}-${this._idCounter}` as QueryId;
   }
+}
+
+/**
+ * Roll up the multi-probe sona binding check into a single `sona` summary
+ * CheckResult. The catalog's `sona` capability has `probeName: 'sona'`, so
+ * this is the row the value-report reducer looks at.
+ */
+function summarizeSonaProbes(checks: readonly CheckResult[]): CheckResult {
+  const broken = checks.find((c) => c.status === 'broken' || c.status === 'error');
+  if (broken) {
+    return {
+      name: 'sona',
+      status: broken.status,
+      detail: `${broken.name}: ${broken.detail ?? '(no detail)'}`,
+      durationMs: checks.reduce((n, c) => n + c.durationMs, 0),
+      tier: 'archetype',
+    };
+  }
+  const unsupported = checks.find((c) => c.status === 'unsupported');
+  if (unsupported) {
+    return {
+      name: 'sona',
+      status: 'unsupported',
+      detail: unsupported.detail ?? 'binding unavailable',
+      durationMs: checks.reduce((n, c) => n + c.durationMs, 0),
+      tier: 'archetype',
+    };
+  }
+  return {
+    name: 'sona',
+    status: 'ok',
+    detail: `${checks.length} sona binding probes passed (construct, trajectory, applyLora)`,
+    durationMs: checks.reduce((n, c) => n + c.durationMs, 0),
+    tier: 'archetype',
+  };
 }

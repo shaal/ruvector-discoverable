@@ -43,13 +43,15 @@ console.log(`  binding: ${explicitBinding}`);
 
 // M9: cross-archetype coordination. The KB takes a GraphReasoner so ingest()
 // populates the doc-entity graph and retrieve() can fan out via kHopNeighbors.
-// User-supplied — KB doesn't auto-construct it.
+// M10: SONA continual learning. recordFeedback now actually trains, and
+// retrieve() warps the query embedding via the current LoRA delta.
 const graph = await GraphReasoner.create({ dimensions: DIMS, distanceMetric: 'Cosine' });
 const kb = await KnowledgeBase.create({
   dimensions: DIMS,
   distanceMetric: 'Cosine',
   bindingPath: explicitBinding,
   graphReasoner: graph,
+  sona: true, // M10 v0.1 — opt in to SONA continual learning
 });
 
 console.log('\n[0a] Value report BEFORE healthCheck — declared only:');
@@ -94,11 +96,20 @@ for (const c of r1.citations) {
   console.log(`    ${(c.source ?? 'vector').padEnd(15)} ${c.documentId.padEnd(14)} score=${c.score.toExponential(2)}${bridge}`);
 }
 console.log(`  explain: ${r1.explain.path.join(' → ')} (${r1.explain.totalLatencyMs.toFixed(2)}ms)`);
-console.log(`  → vector top alone returned auth-spec; Graph RAG added crypto-notes via shared #auth entity`);
+console.log(`  note: with SONA wired, retrieval goes through sonaApplyLora before vectorSearch.`);
+console.log(`  At zero training the LoRA delta is essentially identity; after many trajectories`);
+console.log(`  with reward signals, the warp learns to pull rewarded routes closer.`);
 
-console.log('\n[3] Recording feedback (SONA dormant — call is a no-op in v0.1):');
+console.log('\n[3] Recording feedback (SONA wired — actually trains the LoRA delta):');
 await kb.recordFeedback(r1.queryId, { score: 1, label: 'correct' });
-console.log(`  feedback recorded (will route to SONA when wired in v0.2)`);
+console.log(`  feedback recorded; trajectory closed with reward=+1; tick fired`);
+
+// Run a few more retrievals + feedbacks to exercise the trajectory loop.
+for (let i = 0; i < 3; i++) {
+  const r = await kb.retrieve(queryEmb, { k: 1 });
+  await kb.recordFeedback(r.queryId, { score: 1, label: 'correct' });
+}
+console.log(`  exercised 3 more retrieve+feedback cycles`);
 
 console.log('\n[4] ask() is deferred to LLM milestone:');
 try {

@@ -33,6 +33,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@ruvector/graph-node": "^2.0.3"
+    "@ruvector/graph-node": "^2.0.3",
+    "@ruvector/sona": "^0.1.6"
   }
 }

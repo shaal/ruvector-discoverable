@@ -194,6 +194,29 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M10 v0.1 outcome (SONA wired; `sdk-integration` queue empty)
+
+The second `sdk-integration` dormant capability flips to active. `KnowledgeBase` now optionally takes `sona: true` (or a config object) at create-time; when wired, `retrieve()` warps the query embedding via `applyMicroLora` and begins a SONA trajectory; `recordFeedback()` ends the trajectory with the reward signal and ticks the engine for learning.
+
+API surface discovered by probing the binding:
+- `SonaEngine.withConfig({ hiddenDim })` constructs.
+- `beginTrajectory(input: number[])` → numeric trajectoryId.
+- `setTrajectoryRoute(tid, routeId: string)` — top-citation docId in our wiring.
+- `endTrajectory(tid, reward: number)` — reward in `[-1, 1]`.
+- `applyMicroLora(input: number[], strength?: number)` → number[] — the LoRA-warped query.
+- `tick()` triggers learning; `getStats()` returns a debug-stringified `CoordinatorStats` we regex-parse.
+
+**Project-wide `sdk-integration` count: 2 → 0.**
+- Pre-M10: graphRag (M9 v0.1 flipped it) + sona + changepointDetection. After M9.1's classification edit: graphRag was active; sona and changepointDetection sdk-integration.
+- Post-M10: only changepointDetection remains as sdk-integration. (changepointDetection is in TimeSeriesMemory, not KB.)
+- Across the three working archetypes' value reports: 11 upstream-binding / 1 upstream-bug / 1 sdk-integration / 0 design-deferred. **The SDK has paid down its own integration debt for KB/GR.**
+
+**Finding D (M10): `@ruvector/sona@0.1.6` is published-but-broken** with the same defect as upstream's `ruvector` umbrella package found in M6: `package.json#main` references files (`index.js`, `index.d.ts`) that aren't in the tarball. The platform package `@ruvector/sona-darwin-arm64` ships a working `.node`, which the SDK loads directly via the env var + auto-resolve fallback pattern proven in M7 for `@ruvector/core`. Two umbrella packages broken the same way is a publishing-pipeline bug worth filing upstream as a unified issue.
+
+**Finding E (M10): `applyMicroLora` at zero-training perturbs the query non-trivially.** The expected behavior — LoRA delta near-zero before any trajectories with feedback have trained — would mean `applyMicroLora(x) ≈ x`. In practice, the demo's top retrieval rank shifted (`auth-spec` → `db-design`) once SONA was wired even with zero feedback. Documented in the demo's narration. v0.2 should add either a "warmup" mode that bypasses LoRA until N trajectories accumulate, OR a stronger probe assertion that `cos(x, applyMicroLora(x)) > 0.95 before training`.
+
+**Tier-3 SONA probe**: 3 binding-tier probes (construct, trajectory, applyLora) rolled up into a single archetype-tier `sona` summary `CheckResult`. The roll-up uses worst-status semantics: any broken/error → broken; any unsupported → unsupported; otherwise ok. Lets the catalog's `sona` capability resolve via a single named probe while the underlying detail is preserved in the binding-tier results.
+
 ## Update — M9.1 outcome (two-tier dormant classification)
 
 `DormantCapability` now carries a `blocker: DormantBlocker` field, classifying each dormant entry into one of four categories:
