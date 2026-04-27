@@ -36,6 +36,7 @@ import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
+import { validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 import type { LocalLLM } from './LocalLLM.js';
 
@@ -304,14 +305,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   }
 
   static async create(options: TimeSeriesMemoryOptions): Promise<TimeSeriesMemory> {
-    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
-      throw new RuVectorError(
-        'EMBEDDER_DIM_MISMATCH',
-        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match TimeSeriesMemory.dimensions=${options.dimensions}. ` +
-        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
-        'and supply Float32Array (or number[]) values.',
-      );
-    }
+    validateEmbedderDimensions(options.embedder, options.dimensions, 'TimeSeriesMemory');
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',

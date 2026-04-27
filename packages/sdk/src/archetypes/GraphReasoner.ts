@@ -38,6 +38,7 @@ import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
+import { resolveEmbedding, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
 import type { LocalLLM } from './LocalLLM.js';
 
@@ -288,14 +289,7 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
 
   /** Open or create a graph. */
   static async create(options: GraphReasonerOptions): Promise<GraphReasoner> {
-    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
-      throw new RuVectorError(
-        'EMBEDDER_DIM_MISMATCH',
-        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match GraphReasoner.dimensions=${options.dimensions}. ` +
-        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
-        'and supply pre-computed Float32Array on each Node/Edge/Hyperedge.',
-      );
-    }
+    validateEmbedderDimensions(options.embedder, options.dimensions, 'GraphReasoner');
     const backend = await NativeGraphBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -358,21 +352,9 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   private async _resolveNodes(nodes: readonly Node[]): Promise<readonly (Node & { embedding: Float32Array })[]> {
     const out: (Node & { embedding: Float32Array })[] = [];
     for (const n of nodes) {
-      if (n.embedding) {
-        out.push({ ...n, embedding: n.embedding });
-        continue;
-      }
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'MISSING_EMBEDDING',
-          `Node '${n.id}' has no embedding and no embedder is wired. Either supply ` +
-          '`embedding: Float32Array`, supply `text` plus an `embedder` at create-time, ' +
-          'or pass an embedder.',
-        );
-      }
-      const text = n.text ?? n.id;
-      const vec = await this._embedder.embed(text);
-      this.bump('autoEmbed');
+      const wasMissing = n.embedding === undefined;
+      const vec = await resolveEmbedding(n.embedding, n.text ?? n.id, this._embedder, `Node '${n.id}'`);
+      if (wasMissing) this.bump('autoEmbed');
       out.push({ ...n, embedding: vec });
     }
     return out;
@@ -381,19 +363,9 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   private async _resolveEdges(edges: readonly Edge[]): Promise<readonly (Edge & { embedding: Float32Array })[]> {
     const out: (Edge & { embedding: Float32Array })[] = [];
     for (const e of edges) {
-      if (e.embedding) {
-        out.push({ ...e, embedding: e.embedding });
-        continue;
-      }
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'MISSING_EMBEDDING',
-          `Edge '${e.from}->${e.to}' has no embedding and no embedder is wired. ` +
-          'Either supply `embedding: Float32Array` or pass an embedder at create-time.',
-        );
-      }
-      const vec = await this._embedder.embed(e.description);
-      this.bump('autoEmbed');
+      const wasMissing = e.embedding === undefined;
+      const vec = await resolveEmbedding(e.embedding, e.description, this._embedder, `Edge '${e.from}->${e.to}'`);
+      if (wasMissing) this.bump('autoEmbed');
       out.push({ ...e, embedding: vec });
     }
     return out;
@@ -402,19 +374,9 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   private async _resolveHyperedges(edges: readonly Hyperedge[]): Promise<readonly (Hyperedge & { embedding: Float32Array })[]> {
     const out: (Hyperedge & { embedding: Float32Array })[] = [];
     for (const h of edges) {
-      if (h.embedding) {
-        out.push({ ...h, embedding: h.embedding });
-        continue;
-      }
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'MISSING_EMBEDDING',
-          `Hyperedge '${h.description}' has no embedding and no embedder is wired. ` +
-          'Either supply `embedding: Float32Array` or pass an embedder at create-time.',
-        );
-      }
-      const vec = await this._embedder.embed(h.description);
-      this.bump('autoEmbed');
+      const wasMissing = h.embedding === undefined;
+      const vec = await resolveEmbedding(h.embedding, h.description, this._embedder, `Hyperedge '${h.description}'`);
+      if (wasMissing) this.bump('autoEmbed');
       out.push({ ...h, embedding: vec });
     }
     return out;

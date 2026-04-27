@@ -35,6 +35,7 @@ import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
+import { resolveEmbedding, requireEmbedderForString, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 import { NativeSonaBackend } from '../backends/native-sona.js';
 import { GraphReasoner } from './GraphReasoner.js';
@@ -394,14 +395,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   }
 
   static async create(options: KnowledgeBaseOptions): Promise<KnowledgeBase> {
-    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
-      throw new RuVectorError(
-        'EMBEDDER_DIM_MISMATCH',
-        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match KnowledgeBase.dimensions=${options.dimensions}. ` +
-        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
-        'and supply pre-computed Float32Array on each Document.',
-      );
-    }
+    validateEmbedderDimensions(options.embedder, options.dimensions, 'KnowledgeBase');
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -496,17 +490,11 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
 
     // M11.2: string query → embedder → Float32Array. Pre-computed Float32Array
     // is the fast path and bypasses the embedder even if one is wired.
+    // M13.2: dispatch via the shared core/auto-embed helper.
     let queryEmbedding: Float32Array;
     if (typeof query === 'string') {
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'EMBEDDER_NOT_CONFIGURED',
-          'retrieve(string) requires an embedder at create-time. Pass `embedder: <LocalLLM>` ' +
-          'or call retrieve(Float32Array) with a pre-computed query embedding.',
-        );
-      }
       this.bump('autoEmbed');
-      queryEmbedding = await this._embedder.embed(query);
+      queryEmbedding = await requireEmbedderForString(query, this._embedder, 'KnowledgeBase.retrieve');
     } else {
       queryEmbedding = query;
     }
@@ -774,21 +762,9 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   private async _resolveDocEmbeddings(documents: readonly Document[]): Promise<readonly { id: string; text: string; embedding: Float32Array; metadata?: Readonly<Record<string, unknown>> }[]> {
     const out: { id: string; text: string; embedding: Float32Array; metadata?: Readonly<Record<string, unknown>> }[] = [];
     for (const d of documents) {
-      if (d.embedding) {
-        out.push(d.metadata !== undefined
-          ? { id: d.id, text: d.text, embedding: d.embedding, metadata: d.metadata }
-          : { id: d.id, text: d.text, embedding: d.embedding });
-        continue;
-      }
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'MISSING_EMBEDDING',
-          `Document '${d.id}' has no embedding and no embedder is wired. Either supply ` +
-          '`embedding: Float32Array` on each Document, or pass `embedder: <LocalLLM>` to KnowledgeBase.create().',
-        );
-      }
-      const vec = await this._embedder.embed(d.text);
-      this.bump('autoEmbed');
+      const wasMissing = d.embedding === undefined;
+      const vec = await resolveEmbedding(d.embedding, d.text, this._embedder, `Document '${d.id}'`);
+      if (wasMissing) this.bump('autoEmbed');
       out.push(d.metadata !== undefined
         ? { id: d.id, text: d.text, embedding: vec, metadata: d.metadata }
         : { id: d.id, text: d.text, embedding: vec });

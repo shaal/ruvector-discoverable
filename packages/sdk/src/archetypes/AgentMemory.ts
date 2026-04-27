@@ -39,6 +39,7 @@ import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
 import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../core/health.js';
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
+import { resolveEmbedding, requireEmbedderForString, validateEmbedderDimensions } from '../core/auto-embed.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
 import { NativeSonaBackend } from '../backends/native-sona.js';
 import { GraphReasoner } from './GraphReasoner.js';
@@ -312,12 +313,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   }
 
   static async create(options: AgentMemoryOptions): Promise<AgentMemory> {
-    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
-      throw new RuVectorError(
-        'EMBEDDER_DIM_MISMATCH',
-        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match AgentMemory.dimensions=${options.dimensions}.`,
-      );
-    }
+    validateEmbedderDimensions(options.embedder, options.dimensions, 'AgentMemory');
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -404,14 +400,8 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
 
     let queryEmbedding: Float32Array;
     if (typeof context === 'string') {
-      if (this._embedder === null) {
-        throw new RuVectorError(
-          'EMBEDDER_NOT_CONFIGURED',
-          'recall(string) requires an embedder at create-time. Pass `embedder: <LocalLLM>` or call recall(Float32Array).',
-        );
-      }
       this.bump('autoEmbed');
-      queryEmbedding = await this._embedder.embed(context);
+      queryEmbedding = await requireEmbedderForString(context, this._embedder, 'AgentMemory.recall');
     } else {
       queryEmbedding = context;
     }
@@ -625,15 +615,10 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   // ----- Internals -----
 
   private async _resolveVector(record: MemoryRecord): Promise<Float32Array> {
-    if (record.embedding) return record.embedding;
-    if (this._embedder === null) {
-      throw new RuVectorError(
-        'MISSING_EMBEDDING',
-        `MemoryRecord has no embedding and no embedder is wired. Either supply embedding: Float32Array or pass embedder at create-time.`,
-      );
-    }
-    this.bump('autoEmbed');
-    return await this._embedder.embed(record.text);
+    const wasMissing = record.embedding === undefined;
+    const vec = await resolveEmbedding(record.embedding, record.text, this._embedder, 'MemoryRecord');
+    if (wasMissing) this.bump('autoEmbed');
+    return vec;
   }
 
   private _memoryIdPrefix(): string { return `mem:${this._options.agentId}:`; }

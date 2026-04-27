@@ -194,6 +194,22 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M13.2 (auto-embed helper extracted; M8.2 parallel realized)
+
+`packages/sdk/src/core/auto-embed.ts` extracted. Three small helpers (`validateEmbedderDimensions`, `resolveEmbedding`, `requireEmbedderForString`) collapse the duplicated dim-validation + auto-derive logic that had inlined separately across KB / TSM / GR / AgentMemory since M11.2 → M13.1. Each archetype's per-shape resolver (`_resolveDocEmbeddings` / `_resolveNodes` / `_resolveEdges` / `_resolveHyperedges` / `_resolveVector`) now delegates the shared parts.
+
+**Direct parallel to M8.2's `core/capability-catalog.ts` extraction**: that one collapsed three archetype's value-report reducers; this one collapses four archetype's auto-embed plumbing. Same threshold (M8.2 used three samples; M13.2 uses four — the helper-extraction work-item logged in M11.2 explicitly named "after a fourth archetype lands"). Each archetype keeps its own data shape (Document / Node-Edge-Hyperedge / TimeSeriesPoint / MemoryRecord); only the cross-cutting validation + missing-embedding handling moves to the shared module.
+
+**One asymmetry preserved on purpose**: TSM's `coerceValue` keeps its inline `NotImplementedError` for string-without-embedder. M11.2 threw `NotImplementedError` (not `EMBEDDER_NOT_CONFIGURED`) for TSM's string-coerce path because TSM's surface treats strings as a deferred-feature shape (the wider `Float32Array | number[] | string | Record` union from M5). Flipping to `RuVectorError` would be a behavior change visible to error-class catches. Documented in the helper's header comment.
+
+**LOC**: ~80 added in `core/auto-embed.ts`; ~160 removed across the 4 archetypes. Net ~80 LOC reduction. Edge-case smoke confirms 8 error-path codes preserved (3× EMBEDDER_DIM_MISMATCH, 3× MISSING_EMBEDDING, 2× EMBEDDER_NOT_CONFIGURED) — same set M11.2 ratified.
+
+**Invocation counter parity** preserved by reading `wasMissing = item.embedding === undefined` *before* calling `resolveEmbedding`, then bumping `autoEmbed` only when the helper had to derive. Demo's value-report invocation counts on auto-embed-demo unchanged byte-for-byte modulo nondeterminism.
+
+**M8.2-protocol diff**: all 6 demos byte-stable modulo known nondeterminism (random probe IDs, kHop iteration order, tied-cosine ordering, similarity FP variance, timestamps). Pure-refactor verified.
+
+**core/ now houses two cross-archetype helper modules** (`capability-catalog.ts` from M8.2; `auto-embed.ts` from M13.2). If a third comes (e.g., a SONA-trajectory helper after AgentMemory's M13.1 lifted KB's M10 wiring near-verbatim), a `core/shared-adapters/` subdir would be the natural next step. Not yet warranted at two modules.
+
 ## Update — M13.1 outcome (AgentMemory Phase 1A — fifth archetype lands)
 
 `AgentMemory` shipped end-to-end against `@ruvector/core` + optional `@ruvector/sona` + optional `GraphReasoner` + optional `LocalLLM` (M11.2 embedder). Per M13 §6 ratification, all 5 open questions answered along my leans: separate-SONA-by-default with optional `instance` for sharing, both-expose addMemory boundary (LocalLLM.localMemory remains design-deferred), hand-rolled SDK-source hyperbolic Poincaré-ball scorer, M11.2-aligned `MemoryRecord.embedding?: Float32Array`, explicit dormant rows for GNN/Mamba/domain-expansion.
