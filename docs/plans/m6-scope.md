@@ -194,6 +194,27 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M14 scoping (AgentFramework; 0 of 9 named bindings published)
+
+`docs/plans/m14-scope.md` filed. AgentFramework is the **last M5-frozen-stub**; M14.1 closes the headline-archetype frontier. **0 of 9 named rvagent-* bindings published** (verified across 12 plausible naming conventions including 3 alternatives) — worst publication ratio of any archetype scoped to date. M11.3+v0.2 re-probe applied first; 0 drift since M13.2.
+
+**Phase-1A is necessarily pure-SDK orchestration** over the 5 already-shipped archetypes (KB / TSM / GR / LocalLLM / AgentMemory). The framework's "framework" job — task lifecycle, tool dispatch, sub-agent recursion, policy enforcement — doesn't fundamentally need any binding.
+
+**Four-protocol split is sharp**: A2A and ACP fully gated on rvagent-* publication; sub-agent dispatch implementable as recursive `run()` (no binding); MCP has a real near-term path via the public `@modelcontextprotocol/sdk` (independent of upstream Ru). One protocol with a near-term path; three blocked.
+
+**12-row capability catalog** mirrors M13's structure: 1–3 default-active rows, 5–6 sdk-integration user-toggles, 3 upstream-binding always-blocked, 1 upstream-bug linked to Issue #05 (`tool-call-parsing` depends on a real LLM, which depends on #05). One coordinated upstream pass on #05 unblocks both LocalLLM Phase 2 and AgentFramework's tool-call quality.
+
+**5 open questions for ratification**, each with concrete leans:
+1. MCP via public `@modelcontextprotocol/sdk` Phase-1 (lean: yes; one of four protocols becomes active).
+2. Tool-call parsing now or wait for #05 (lean: defer; document toolCalls as framework-explicit-only Phase-1).
+3. SDK-source A2A cosplay (lean: no; in-process A2A is a misnomer; defer cleanly).
+4. Policy enforcement scope (lean: subset; defer maxCostUsd until #05 enables real cost tracking).
+5. Ship Phase-1A as v1.0 with 1-of-4 protocols (lean: yes; the PRD's success metric is `getValueReport` honesty, not protocol completeness).
+
+**Cross-archetype DI pattern reaches 7th/8th uses** in AgentFramework's `{ llm, memory, kb, graph }` constructor. The M13.2 `validateEmbedderDimensions` extraction precedent stands ready for a more general `validateOptionalDependency<T>` utility once a 3rd archetype-lifecycle helper case emerges.
+
+**Project state pre-implementation**: 5 archetypes implemented; 1 M5-frozen-stub remains (AgentFramework). After M14.1+ ships, the headline archetype frontier closes and the project's center-of-gravity shifts to the `recommend`/`doctor` CLI (PRD §5.5) and 3-backend transport story.
+
 ## Update — M13.2 (auto-embed helper extracted; M8.2 parallel realized)
 
 `packages/sdk/src/core/auto-embed.ts` extracted. Three small helpers (`validateEmbedderDimensions`, `resolveEmbedding`, `requireEmbedderForString`) collapse the duplicated dim-validation + auto-derive logic that had inlined separately across KB / TSM / GR / AgentMemory since M11.2 → M13.1. Each archetype's per-shape resolver (`_resolveDocEmbeddings` / `_resolveNodes` / `_resolveEdges` / `_resolveHyperedges` / `_resolveVector`) now delegates the shared parts.
