@@ -131,18 +131,21 @@ async function exerciseGraphReasoner(): Promise<void> {
 
 async function exerciseTimeSeries(): Promise<void> {
   const ts: TimeSeriesMemory = await pending();
-  await TimeSeriesMemory.create({ streamId: 'sensor-7', bucketMs: 60_000 });
-  await ts.append({ timestampMs: Date.now(), value: new Float32Array([1, 2, 3]) });
+  await TimeSeriesMemory.create({ streamId: 'sensor-7', dimensions: 4, bucketMs: 60_000 });
+  await ts.append({ timestampMs: Date.now(), value: new Float32Array([1, 2, 3, 4]) });
   await ts.appendBatch([
-    { timestampMs: Date.now(), value: 'log line', tags: ['warn'] },
+    { timestampMs: Date.now(), value: new Float32Array([1, 2, 3, 4]), tags: ['warn'] },
   ]);
-  const out: TemporalResult = await ts.query(new Float32Array([1, 2, 3]), {
+  const out: TemporalResult = await ts.query(new Float32Array([1, 2, 3, 4]), {
     window: { fromMs: 0, toMs: Date.now() },
     k: 5,
-    changepoints: true,
   });
   void out.points[0]?.score;
+  void out.points[0]?.id;
+  void out.points[0]?.timestampMs;
   void out.changepoints[0]?.confidence;
+  void await ts.len();
+  void (await ts.healthCheck()).summary;
   await ts.close();
 }
 

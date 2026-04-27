@@ -477,7 +477,7 @@ All artifacts are regenerable. Upstream changes are tracked by re-running the ca
 | M5 | SDK API spec frozen (TypeScript `.d.ts` only, no impl) | done 2026-04-26 (v0.1) | M4 | 1 session |
 | M6 | Reference example for one archetype (GraphReasoner) | done 2026-04-26 (v0.1) | M5 | 1 session |
 | M7 | SDK v0.1 — second archetype (KnowledgeBase) on @ruvector/core | done 2026-04-27 (v0.1) | M6 | 1 session |
-| M8 | SDK v0.2 — three archetypes, `getValueReport`, `.explain` | TBD | M7 | 3 weeks |
+| M8 | SDK v0.1 — third archetype (TimeSeriesMemory) on @ruvector/core | done 2026-04-27 (v0.1) | M7 | 1 session |
 | M9 | SDK v0.3 — `doctor` / `recommend` CLI, capability registry | TBD | M8 | 2 weeks |
 | M10 | SDK v1.0 — eight (or final) archetypes, docs site | TBD | M9 | 4 weeks |
 

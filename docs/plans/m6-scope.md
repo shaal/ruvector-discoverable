@@ -194,6 +194,23 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M8 v0.1 outcome (TimeSeriesMemory + third-archetype validation; abstraction-extraction unblocked)
+
+The catalog/probe pattern survived its third archetype with **zero source-level changes**. TimeSeriesMemory uses an identically-shaped `CAPABILITY_CATALOG`, the same `getValueReport` reducer, the same `introspect`. Three meaningfully different workloads (graph / vector / timestamp-keyed) now share the value-report machinery.
+
+**v0.2 work-item now unblocked**: extract `core/capability-catalog.ts` with a shared `runCatalogReducer(catalog, lastHealth, invocationCounts)` function. Three samples is enough; the abstraction is no longer accidentally graph-shaped. Each archetype keeps its own catalog data; only the reducer logic gets shared (~80 LOC dedup × 3).
+
+**Bug found by demo, not by smoke check.** The first run of TimeSeriesMemory's demo silently returned 0 matches despite confirmed 30 inserts. Smoke check passed 5/5. Root cause: SDK-side `padTs(ms)` used `ms | 0` for integer coercion, which is signed-int32-truncate; for any timestamp after Sep 2003 it overflows negative, `Math.max(0, negative)` returns 0, all sample IDs encoded with timestamp portion `000000000000000`, window filter then drops everything. Fixed with `Math.trunc(ms)`. **Lesson**: smoke checks validate the *backend*; SDK-internal logic still needs end-to-end demo runs that look at *result quality*, not just absence of errors. The demo's "0 matches in 30-sample window" output was the right signal; smoke-check pass/fail was orthogonal.
+
+**TimeSeriesMemory v0.1 is the first archetype where a unique capability actually returns a useful result.** GraphReasoner v0.1 has cypher stubbed upstream; KnowledgeBase v0.1 is search-only with no LLM. TSM v0.1 correctly identifies a 14-minute anomaly window in a 30-sample trace via vector similarity — real anomaly detection on a real backend. Even with 5 of 9 capabilities dormant, the working surface delivers value.
+
+**v0.1 limitations declared and documented**:
+- Window filtering is post-search; narrow windows degrade recall (visible via `deltaIndexing` dormant entry).
+- `value: string | Record` accepted at compile time, throws at runtime — wider M5 union preserved for forward compat with the embedder.
+- No `appendBatch` chunking — large batches could OOM the binding.
+- `bucketMs` option is advisory only — temporal compression isn't wired.
+- `detectChangepoints()` throws (no streaming primitive in `@ruvector/core`; deferred until Mamba bindings or a v0.2 trivial baseline).
+
 ## Update — M7 v0.1 outcome (KnowledgeBase + second-archetype validation)
 
 The catalog/probe pattern from M6.2 ports to a second archetype with no source-level changes. `KnowledgeBase` (wired to `@ruvector/core` via the in-repo prebuilt binary) uses an identically-shaped `CAPABILITY_CATALOG`, an identically-shaped `getValueReport` reducer, and an identically-shaped `introspect`. Both archetypes' value reports now read the same way: `source`, `lastHealthCheckAt`, `[observed via probe ...]` dormant strings.
