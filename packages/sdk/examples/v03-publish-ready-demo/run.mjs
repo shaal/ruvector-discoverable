@@ -140,11 +140,11 @@ const m4 = await am.remember({ text: 'user is a senior software engineer',    ta
 console.log(`    remembered 4 memories, ids: ${[m1, m2, m3, m4].map(m => m.id.slice(-8)).join(', ')}`);
 
 const recall = await am.recall('what does the user prefer?', { k: 3 });
-const memText = new Map([[m1.id, 'dark mode'], [m2.id, 'compact UI'], [m3.id, 'EST timezone'], [m4.id, 'senior engineer']]);
+// M21: recall().records[i].text now returns the original remember()-time
+// text — no local Map<id, text> workaround needed (was required pre-M21).
 console.log(`    recall "what does the user prefer?" k=3 (top results should be preferences-tagged):`);
 for (const r of recall.records) {
-  const text = memText.get(r.id) ?? '(unknown)';
-  console.log(`      score=${r.score.toFixed(4)}  ${r.id.slice(-12)}  → "${text}"`);
+  console.log(`      score=${r.score.toFixed(4)}  ${r.id.slice(-12)}  → "${r.text}"`);
 }
 
 await am.recordFeedback(recall.queryId, { score: 1, comment: 'spot-on' });

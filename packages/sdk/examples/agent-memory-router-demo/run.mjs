@@ -39,7 +39,7 @@ console.log(`  remembered 4 memories: ${[m1, m2, m3, m4].map(m => m.id).join(', 
 console.log('\n[2] Recall using a "preferences" query (should rank m1, m2 first):');
 const recall = await am.recall(oneHot(0), { k: 4 });
 for (const r of recall.records) {
-  console.log(`    ${r.id.padEnd(28)} score=${r.score.toFixed(4)}  source=${r.source ?? 'vector'}`);
+  console.log(`    ${r.id.padEnd(28)} score=${r.score.toFixed(4)}  → "${r.text}"`);
 }
 
 console.log('\n[3] Record feedback (SONA loop runs unchanged on router):');

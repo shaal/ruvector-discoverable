@@ -313,6 +313,12 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   // Mirror inserted memories so hyperbolic re-ranking can run client-side
   // (the Poincaré scorer needs the original vectors, not just IDs/scores).
   private _vectorMirror = new Map<string, Float32Array>();
+  // **M21 (v0.4)**: persist user-supplied `text` from remember() so recall()
+  // returns it instead of the v0.1 placeholder. Bounded by the same
+  // archetype lifecycle as _memoryTags / _vectorMirror; cleared on forget()
+  // and close(). When `text` is omitted at remember-time (embedding-only
+  // remember), no entry is written and recall falls back to the placeholder.
+  private _textStore = new Map<string, string>();
 
   private constructor(
     backend: KbBackend,
@@ -381,6 +387,9 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     const id = this._nextMemoryId();
     await this._backend.insert(id, vector);
     this._vectorMirror.set(id, vector);
+    // M21: persist text when supplied. Embedding-only remember() leaves
+    // _textStore unset for this id; recall falls back to the placeholder.
+    if (record.text !== undefined) this._textStore.set(id, record.text);
 
     const tags = this._relationExtractor(record);
     if (tags.length > 0) this._memoryTags.set(id, tags);
@@ -479,7 +488,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     const recalledAt = new Date().toISOString();
     let records: RecalledMemory[] = hits.slice(0, k).map((h) => ({
       id: h.id,
-      text: '(text not stored in v0.1 — supply via metadata in v0.2)',
+      text: this._textStore.get(h.id) ?? '(text not stored — remember() received no text field)',
       score: h.score,
       recalledAt,
       source: 'vector' as const,
@@ -521,7 +530,7 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
       for (const [memId, info] of adjacentByMem) {
         records.push({
           id: memId,
-          text: '(text not stored in v0.1)',
+          text: this._textStore.get(memId) ?? '(text not stored — remember() received no text field)',
           score: info.score,
           recalledAt,
           source: 'graph-adjacent',
@@ -573,14 +582,18 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
    *
    * **M19 caveat under `nativePackage: 'router'`**: throws `CAPABILITY_DEFERRED`
    * because `@ruvector/router@0.1.30.VectorDb.delete()` deadlocks (Issue #11).
-   * SDK-side state (`_memoryTags`, `_vectorMirror`) IS still cleared — the
-   * call is documented as a partial-success: tags+mirror cleared, but the
-   * vector remains in the underlying store and is still searchable.
+   * SDK-side state (`_memoryTags`, `_vectorMirror`, `_textStore`) IS still
+   * cleared — the call is documented as a partial-success: SDK-side state
+   * cleared, but the vector remains in the underlying store and is still
+   * searchable. Text returned from a subsequent `recall()` of that id will
+   * fall back to the M21 placeholder (`(text not stored …)`) since
+   * `_textStore` was cleared.
    */
   async forget(id: string): Promise<boolean> {
     this.assertOpen();
     this._memoryTags.delete(id);
     this._vectorMirror.delete(id);
+    this._textStore.delete(id);
     this.bump('forget');
     return await this._backend.deleteId(id);
   }

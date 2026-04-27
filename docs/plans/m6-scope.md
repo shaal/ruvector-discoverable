@@ -194,6 +194,93 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M21 outcome (AgentMemory text storage v0.4; M20 demo paper-cut closed)
+
+The only user-visible paper-cut from the M20 v0.3 demo is closed.
+`AgentMemory.recall()` now returns the user's original text from
+`remember()` instead of the v0.1 placeholder. Demos no longer need
+local `Map<id, text>` workarounds.
+
+**Implementation** (~15 LOC of source + 2 demo simplifications):
+
+- `_textStore: Map<string, string>` field added to AgentMemory
+  alongside `_memoryTags` and `_vectorMirror`. Bounded by the same
+  archetype lifecycle.
+- `remember()` populates `_textStore` when `record.text` is supplied;
+  embedding-only `remember()` leaves the entry unset.
+- Both recall code paths (vector hits and graph-adjacent hits) now
+  read from `_textStore.get(id)` and fall back to a placeholder when
+  no text was stored.
+- `forget()` clears `_textStore.delete(id)` alongside the existing
+  cleanups; updated JSDoc to name the new partial-success behavior
+  on router transport.
+- New placeholder wording: `"(text not stored — remember() received no
+  text field)"` (more accurate than the prior `"in v0.1 — supply via
+  metadata in v0.2"` which suggested a temporal fix).
+
+**Demo simplifications**:
+- `examples/v03-publish-ready-demo/run.mjs`: dropped the local
+  `memText` Map<id, text> workaround. Now reads `r.text` directly
+  from `recall().records[i]`. Demo output now shows: "user prefers
+  dark mode interface", "user prefers compact UI density", "user is
+  in EST timezone".
+- `examples/agent-memory-router-demo/run.mjs`: added text to the
+  recall output line. Now shows "user prefers dark mode" etc.
+
+**Drift-by-inversion verified**: commented out the `_textStore.set()`
+call in `remember()`. Demo correctly fell back to the placeholder
+`"(text not stored — remember() received no text field)"`. Restored
+cleanly. The drift-inversion confirms that the lookup-on-recall is
+the new behavior; without the `.set()` the recall path operates as
+pre-M21.
+
+**M8.2 byte-stable**: native AgentMemory demo still hits the same
+Issue #03 dimension-mismatch as baseline (NOT a regression). Router
+demos still pass exit 0.
+
+**Capability catalog unchanged**: per the task brief, this is an
+SDK-internal correctness fix (filling in a placeholder with the
+right value), not a new capability. No catalog row added or
+modified.
+
+**Edge case characterization**:
+- Embedding-only `remember()` (no `text` field): `_textStore` not
+  populated for that id. recall() falls back to the placeholder.
+  Documented behavior — backward compatible with consumers that
+  rely on placeholder presence.
+- Cross-instance: two `AgentMemory` instances with the same `agentId`
+  in one process have separate `_textStore` maps. No cross-talk.
+- Memory growth: `_textStore` grows unbounded with each `remember()`,
+  cleared only on `forget()` and (implicitly) when the archetype
+  instance is GC'd. Same lifecycle property as `_memoryTags` and
+  `_vectorMirror` — pre-existing pattern, not a new leak.
+
+**Project state after M21**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- v0.3 publish-ready demo passes WITHOUT env var, with **real
+  AgentMemory recall texts** (no local Map workaround needed)
+- 11 paste-ready upstream issues (#01–#11) — M21 surfaces no new ones
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- v0.4 reprobe (31 npm + 1 CLI)
+- The v0.3 publish-ready story is now polished end-to-end.
+
+**Next ship-task candidates**:
+- **M17.3**: HTTP transport — still blocked on Issue #08 republish.
+- **`reprobe.mjs` v0.5**: surface-contract probes for binding-method
+  defects (Issue #11 deadlock detection without hanging reprobe).
+- **Cross-archetype-DI scoping doc**: scope additional DI patterns
+  now that v0.3 invariants are ratified.
+- **AgentMemory text persistence to backend**: M21 stores text in
+  an in-process Map; survives the process lifetime but not restarts.
+  v0.5 could persist text alongside the embedding via the backend's
+  metadata/properties channel (when one exists).
+
+`docs/upstream-issues/README.md` references unchanged (M21 surfaced
+no new upstream issues — pure SDK-side fix).
+
 ## Update — M20 outcome (cross-archetype DI demo on router; v0.3 publish-ready story end-to-end validated)
 
 **The M17.1 / M17.2 / M18 / M19 abstraction holds across the full
