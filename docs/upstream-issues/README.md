@@ -20,6 +20,7 @@ The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smo
 | [`03-core-vectordb-construction-quirks.md`](03-core-vectordb-construction-quirks.md) | API design | `@ruvector/core@2.2.0` |
 | [`04-sona-microlora-warmup.md`](04-sona-microlora-warmup.md) | Behavior + docs | `@ruvector/sona@0.1.6` |
 | [`05-no-model-loading-api.md`](05-no-model-loading-api.md) | API gap | `@ruvector/ruvllm@2.5.4`, `@ruvector/ruvllm-darwin-arm64@2.0.1` |
+| [`06-query-route-under-populated-fields.md`](06-query-route-under-populated-fields.md) | Wrapper bug | `@ruvector/ruvllm@2.5.4` |
 
 ## How the SDK found these
 

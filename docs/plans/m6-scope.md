@@ -194,6 +194,23 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M12.4 (Issue #06 authored; M12.1's root-cause theory was wrong)
+
+`docs/upstream-issues/06-query-route-under-populated-fields.md` filed. Lifted from #05's "Related findings" section and expanded — but during the lift, **a fresh probe of the native-layer binding overturned M12.1's first-pass theory**. M12.1 attributed the missing-field defect to "native struct under-populated"; the actual root cause is the JS-layer wrapper renaming snake_case to camelCase that the native binding already provides.
+
+Concretely:
+
+- `@ruvector/ruvllm-darwin-arm64`'s `RuvLlmEngine.query()` returns `{text, confidence, model, contextSize, latencyMs, requestId}` — all 6 fields populated, all camelCase.
+- `@ruvector/ruvllm`'s JS wrapper does `contextSize: result.context_size` — looks up snake_case, gets `undefined`.
+
+The fix is one-line per method: drop the rename layer (`return result;`) since the native return shape already matches the documented contract.
+
+**Lesson for the SDK's diagnostic infrastructure**: a probe that says "missing fields" is honest but stops one layer short of the root cause. The SDK's `queryConfidenceBounded` / `routeDecisionShape` probes call out *which* fields are undefined; what they don't tell you is whether the gap lives in the native binding, the JS wrapper, or somewhere between. M12.4 spent ~5 minutes probing both layers to pin it precisely. That kind of layer-by-layer probe is the same thing the M11.3+v0.2 reprobe tool codifies for npm/CLI surfaces — there's a parallel v0.3 work-item here for "binding-layer probe" that asserts each layer's contract independently. Logged but not built; the pattern is rare enough that one-time manual probing is fine for now.
+
+**Issue #05's "Related findings" section** corrected with a pointer at #06 and the fixed root-cause attribution. Updates traceable: `git blame` on #05 shows the original (wrong) attribution dates 2026-04-27 (M12.1); the correction (also 2026-04-27) carries the M12.4 reference.
+
+`docs/upstream-issues/README.md` updated with the #06 entry. Three Phase 2 issues now point at the same JS-layer file (`@ruvector/ruvllm/dist/cjs/engine.js`): #02 (broken ESM build), #05 (no model_path config), #06 (rename-layer drops fields). One coordinated upstream pass could close all three.
+
 ## Update — M11.3 v0.2 (CLI surface-contract probing; codifies the M12.2 lesson)
 
 `tools/reprobe-bindings/reprobe.mjs` extended with a `CLI_PROBES` table. For each tracked binary, the script spawns `<bin> --help` and regex-tests two sets of expectations:

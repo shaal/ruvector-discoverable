@@ -161,22 +161,10 @@ Either:
 
 Any of the three would unblock the integrating SDK's Phase 2A surface (which currently classifies `generate` as `[upstream-bug]` per the probe above).
 
-## Related findings (worth a separate issue #06)
+## Related findings — see [Issue #06](06-query-route-under-populated-fields.md)
 
-While verifying #05, the same probe pass surfaced a second defect in the JS-layer wrapper: `RuvLLM.query()` and `RuvLLM.route()` claim to return 6-field `QueryResponse` and 5-field `RoutingDecision` shapes respectively, but the underlying native struct only populates 3 of 6 (`text`, `confidence`, `model`) and 3 of 5 (`model`, `temperature`, `confidence`) fields. The JS wrapper's field-mapping (`contextSize: result.context_size` etc.) propagates `undefined` for the un-populated fields. This is a separate defect from the model-loading gap (#05) and worth filing independently.
+While verifying #05, the same probe pass surfaced a separate defect: `RuvLLM.query()` and `RuvLLM.route()` return objects whose JS-layer wrapper claims to populate 6/5 fields but only delivers 3/3 — `contextSize`, `latencyMs`, `requestId`, `topP` all come back `undefined`.
 
-Reproducer output:
+The first-pass theory in M12.1 was that the native binding under-populated the struct. **That was wrong.** A direct probe of the platform binding (`@ruvector/ruvllm-darwin-arm64@2.0.1`) shows the native side returns *all* fields, all camelCase. The defect is in the umbrella's JS-layer wrapper (`engine.js`), which renames snake_case → camelCase that the native binding has already done — every snake_case lookup hits `undefined`.
 
-```
-query() — keys present: [text, confidence, model, contextSize, latencyMs, requestId]
-  but JSON.stringify drops undefineds, leaving:
-  { "text": "...", "confidence": 0.6841, "model": "B1_2" }
-  (contextSize, latencyMs, requestId all undefined)
-
-route() — keys present: [model, contextSize, temperature, topP, confidence]
-  but JSON.stringify drops undefineds, leaving:
-  { "model": "B1_2", "temperature": 1.377, "confidence": 0.6849 }
-  (contextSize and topP undefined)
-```
-
-The integrating SDK's `queryConfidenceBounded` and `routeDecisionShape` probes catch this and surface the missing field names as actionable diagnostic.
+Filed as a standalone issue at [`06-query-route-under-populated-fields.md`](06-query-route-under-populated-fields.md) with the corrected root cause and a one-line fix shape.
