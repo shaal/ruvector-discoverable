@@ -194,6 +194,92 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M25 outcome (repo-root README.md — visitor-facing front page for the published repo)
+
+The repo went public at https://github.com/shaal/ruvector-discoverable
+without a top-level README, so GitHub's rendered front page was a bare
+file tree. M25 adds the missing visitor-facing index — a 67-line router
+that points each of 4 audiences (SDK consumers, contributors/AI
+assistants, upstream maintainers, power users) at their right next-click.
+
+**Implementation** (~70 LOC, doc-only):
+
+- New `README.md` at repo root. Sections (in order):
+  - One-paragraph "what this is" — task-first archetypes over upstream
+    RuVector, 6 archetypes, .explain(), getValueReport() with 4-blocker
+    classification, 11 paste-ready upstream issues
+  - Status callout (v0.3 / pre-npm-publish / KB-family publish-ready
+    via `nativePackage: 'router'` / 38 monitored upstream signals via
+    reprobe v0.5)
+  - "Where to click first (by intent)" — 4-row audience-routing table
+  - "Three things this SDK does that a vanilla wrapper doesn't" — the
+    PRD §4 patterns distilled to 3
+  - Quick-start (clone + npm install + run the v03 demo)
+  - Verifying the upstream surface (one-line reprobe invocation)
+  - Project history (links to journal + NEXT-SESSION.md)
+  - License row
+
+**Design constraint**: pure router/index — no content duplication with
+`packages/sdk/README.md`. The repo-root README is "where do I go
+next?"; the SDK consumer doc is "how do I use it?". 4 audiences × 1
+link each = 4 cross-refs in the routing table; the rest of the page is
+status + differentiators + quick-start.
+
+**Cross-reference verification**: ran `grep -oE '\]\([^)]+\)' README.md`
++ filesystem `test -e` for each. All 10 relative links resolve to
+existing files (CLAUDE.md, NEXT-SESSION.md, LICENSE, packages/sdk/README.md,
+packages/sdk/examples/v03-publish-ready-demo/run.mjs,
+docs/plans/ruvector-sdk-prd.md, docs/plans/m6-scope.md,
+docs/upstream-issues/, catalog/catalog.md, NEXT-SESSION.md).
+
+**Caught (not really live, but worth noting)**:
+- The README hardcodes "11 issues #01–#11" and "38 upstream signals" —
+  these will drift as new issues/probes ship. PRD §11.6 already
+  acknowledges this tradeoff explicitly ("explicit count for now").
+  The README inherits the same tradeoff; per CLAUDE.md "trust
+  observed > declared" the right call is to describe today's reality
+  and accept the maintenance cost when it changes.
+
+**Verified**: line count 67 (under 100 target); all 10 relative links
+resolve; no content duplication with packages/sdk/README.md; no exotic
+markdown features (tables, code fences, blockquotes, links — all
+GitHub-render-safe); status callout and differentiators match observed
+reality.
+
+**Not verified** (acceptable gaps):
+- Live GitHub render (markdown correctness checked; renderer behavior
+  presumed standard)
+- The clone URL `git clone https://github.com/shaal/ruvector-discoverable`
+  is hardcoded; if the repo is ever renamed or transferred, this line
+  goes stale (acceptable per typical README conventions)
+
+**Project state after M25**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11)
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- **Repo published** at https://github.com/shaal/ruvector-discoverable
+  with 4 entry points (CLAUDE.md, NEXT-SESSION.md, packages/sdk/README.md,
+  docs/upstream-issues/) all reachable from the new top-level README
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+
+**Next ship-task candidates**:
+- **GitHub Actions CI** — automate `npm run verify` + `node tools/
+  reprobe-bindings/reprobe.mjs` on push/PR. Per PRD §10 metric #6,
+  reprobe-clean is a testable success criterion; let CI enforce it.
+  ~30 LOC YAML.
+- **AgentMemory text persistence to backend** — M21 stores in-process;
+  v0.5 could persist via backend metadata.
+- **An Issue #04 or #05 probe attempt** — the 2 unprobed issues from
+  PRD §11.6's coverage map.
+- **Cross-archetype-DI scoping doc** — additional DI patterns now
+  that v0.3 invariants are ratified.
+
+`docs/upstream-issues/README.md` references unchanged (M25 surfaced no
+new upstream issues).
+
 ## Update — M24 outcome (PRD §11.6 ratifies upstream-tracking surface; §10 gains testable metric #6)
 
 The discipline M22+M23 built (38 monitored upstream signals via 3 probe
