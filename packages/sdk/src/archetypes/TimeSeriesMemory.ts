@@ -56,6 +56,15 @@ export interface TimeSeriesMemoryOptions {
   readonly bindingPath?: string;
   /** Granularity hint for temporal compression. Currently advisory only. */
   readonly bucketMs?: number;
+  /**
+   * Maximum number of recent points retained in the SDK-side ring buffer
+   * for changepoint detection. Defaults to 1000. Detection on windows
+   * older than the ring buffer's earliest entry returns empty with an
+   * explain note; v0.2 with delta-* bindings would do native windowed scans.
+   */
+  readonly maxRecentForChangepoints?: number;
+  /** Sliding-window size (left + right) for changepoint detection. Default 5. */
+  readonly changepointWindow?: number;
   readonly capabilities?: TimeSeriesCapabilityConfig;
 }
 
@@ -188,15 +197,16 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
   },
   {
     name: 'changepointDetection',
-    source: 'ruvector-attention',
-    defaultStatus: 'dormant',
-    // sdk-integration: a trivial baseline (sliding-window L2 distance, CUSUM)
-    // could ship in pure SDK code without any upstream change. Deliberate
-    // v0.1 deferral; see m6-scope.md.
-    defaultDormantBlocker: 'sdk-integration',
-    defaultDormantReason: 'detectChangepoints() throws in v0.1 — no streaming primitives in @ruvector/core; Mamba SSM (the natural backend) is not bound. v0.2 may add a trivial baseline.',
-    defaultDormantLift: 'Real-time anomaly detection without a fitted model.',
-    defaultDormantEnable: 'Wait for v0.2 baseline OR Mamba binding publication.',
+    source: '@ruvector/sdk',
+    probeName: 'changepointDetection',
+    invocationKey: 'detectChangepoints',
+    // M10.1: SDK ships a sliding-window mean-shift baseline detector.
+    // No upstream change required — pure SDK code over the in-memory
+    // ring buffer of recent appended points. v0.2+ would add Mamba-SSM
+    // (when @ruvector/attention-node ships) as a more sophisticated
+    // alternative; for now the baseline detects clear discontinuities
+    // reliably.
+    defaultStatus: 'active',
   },
 ];
 
@@ -231,6 +241,11 @@ function parseId(id: string): { streamId: string; timestampMs: number; seq: numb
 
 // ---------------- Implementation ----------------
 
+interface RingPoint {
+  readonly timestampMs: number;
+  readonly value: Float32Array;
+}
+
 export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvider {
   private readonly _backend: NativeCoreBackend;
   private readonly _options: TimeSeriesMemoryOptions;
@@ -238,10 +253,26 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
   private _seq = 0;
+  // M10.1: ring buffer of recent points for changepoint detection.
+  // Bounded; oldest are dropped on overflow. Detection on windows that
+  // predate the ring's earliest entry returns empty with an explain note.
+  private _recent: RingPoint[] = [];
+  private readonly _maxRecent: number;
+  private readonly _cpWindow: number;
 
   private constructor(backend: NativeCoreBackend, options: TimeSeriesMemoryOptions) {
     this._backend = backend;
     this._options = options;
+    this._maxRecent = Math.max(2, options.maxRecentForChangepoints ?? 1000);
+    this._cpWindow = Math.max(1, options.changepointWindow ?? 5);
+  }
+
+  private pushRecent(point: RingPoint): void {
+    this._recent.push(point);
+    if (this._recent.length > this._maxRecent) {
+      // Drop oldest. Array.shift() is O(n); fine for v0.1 sizes (1000s).
+      this._recent.shift();
+    }
   }
 
   static async create(options: TimeSeriesMemoryOptions): Promise<TimeSeriesMemory> {
@@ -259,6 +290,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
     const vector = this.coerceValue(point.value);
     const id = buildId(this._options.streamId, point.timestampMs, this._seq++);
     await this._backend.insert(id, vector);
+    this.pushRecent({ timestampMs: point.timestampMs, value: vector });
     this.bump('append');
   }
 
@@ -270,8 +302,12 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
       vector: this.coerceValue(p.value),
     }));
     await this._backend.insertBatch(entries);
-    // Bump `append` (not `appendBatch`) so the catalog's invocationKey aggregates
-    // both single + batch writes under one capability counter.
+    // Mirror to the ring buffer for changepoint detection.
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const e = entries[i];
+      if (p && e) this.pushRecent({ timestampMs: p.timestampMs, value: e.vector });
+    }
     this.bump('append');
     return { written: points.length };
   }
@@ -285,13 +321,6 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
    */
   async query(value: TimeSeriesPoint['value'], options: TemporalQueryOptions = {}): Promise<TemporalResult> {
     this.assertOpen();
-    if (options.changepoints === true) {
-      throw new NotImplementedError(
-        'TimeSeriesMemory.query({ changepoints: true }) — changepoint detection is deferred ' +
-        'until either ruvector-attention-node ships or v0.2 adds a trivial baseline. ' +
-        'Use detectChangepoints() to discover the same deferral with the same message.'
-      );
-    }
     const start = performance.now();
     const vector = this.coerceValue(value);
     const k = options.k ?? 32;
@@ -311,29 +340,118 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
     const total = performance.now() - start;
     this.bump('query');
 
+    // M10.1: optionally compute changepoints over the same window.
+    const { changepoints, ringBufferNote } = options.changepoints === true
+      ? this.runChangepointDetection(options.window)
+      : { changepoints: [] as readonly Changepoint[], ringBufferNote: null as string | null };
+    if (options.changepoints === true) this.bump('detectChangepoints');
+
     return {
       points: scoped,
-      changepoints: [], // never populated in v0.1
+      changepoints,
       explain: {
-        path: ['vectorSearch', 'streamFilter', 'windowFilter'],
+        path: options.changepoints === true
+          ? ['vectorSearch', 'streamFilter', 'windowFilter', 'changepointDetection']
+          : ['vectorSearch', 'streamFilter', 'windowFilter'],
         stages: [
           { name: 'vectorSearch', source: 'ruvector-core', durationMs: total, note: `k=${k}, ${hits.length} raw hits` },
           { name: 'streamFilter', source: '@ruvector/sdk', durationMs: 0, note: `kept ${scoped.length} matching streamId='${this._options.streamId}'` },
           ...(options.window ? [{ name: 'windowFilter', source: '@ruvector/sdk', durationMs: 0, note: `window=[${options.window.fromMs}..${options.window.toMs}]` }] : []),
+          ...(options.changepoints === true ? [{
+            name: 'changepointDetection',
+            source: '@ruvector/sdk',
+            durationMs: 0,
+            note: `${changepoints.length} changepoint(s) found${ringBufferNote ? `; ${ringBufferNote}` : ''}`,
+          }] : []),
         ],
-        capabilities: [{ name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null }],
+        capabilities: [
+          { name: 'vectorSearch', source: 'ruvector-core', estimatedLift: null },
+          ...(options.changepoints === true ? [{ name: 'changepointDetection', source: '@ruvector/sdk', estimatedLift: null }] : []),
+        ],
         totalLatencyMs: total,
       },
     };
   }
 
-  /** Detect changepoints. v0.1 throws — no streaming primitive in @ruvector/core. */
-  detectChangepoints(_options?: { window?: QueryWindow }): Promise<readonly Changepoint[]> {
-    throw new NotImplementedError(
-      'TimeSeriesMemory.detectChangepoints — deferred to v0.2 (or until ruvector-attention-node ' +
-      'publishes Mamba SSM bindings). v0.1 cannot detect changepoints without a streaming model. ' +
-      'Workaround: query() over windows and inspect score deltas client-side.'
-    );
+  /**
+   * Detect changepoints in the recent window via sliding-window mean-shift.
+   *
+   * Algorithm (M10.1 baseline):
+   *   1. Filter ring-buffer to the requested window (default: entire ring).
+   *   2. Sort by timestamp.
+   *   3. For each interior position t (with at least `_cpWindow` points on each side):
+   *      compute leftMean = mean of vectors in [t - w, t),
+   *              rightMean = mean of vectors in [t, t + w].
+   *      delta = ||leftMean - rightMean||.
+   *   4. Threshold = max(2 × median(delta), tiny epsilon). Flag points with delta > threshold.
+   *   5. Confidence = (delta - threshold) / (max - threshold), clamped to [0, 1].
+   *
+   * Limitations: detection is bounded by the ring buffer (default 1000 points).
+   * Requests for windows older than the buffer's earliest entry return empty.
+   * v0.2 with delta-* bindings would scan storage natively.
+   */
+  async detectChangepoints(options?: { window?: QueryWindow }): Promise<readonly Changepoint[]> {
+    this.assertOpen();
+    this.bump('detectChangepoints');
+    return this.runChangepointDetection(options?.window).changepoints;
+  }
+
+  private runChangepointDetection(window?: QueryWindow): { changepoints: readonly Changepoint[]; ringBufferNote: string | null } {
+    const w = this._cpWindow;
+    let ringBufferNote: string | null = null;
+
+    // 1. Window filter
+    let pts = this._recent;
+    if (window) {
+      pts = pts.filter((p) => p.timestampMs >= window.fromMs && p.timestampMs <= window.toMs);
+      const earliest = this._recent[0]?.timestampMs;
+      if (earliest !== undefined && earliest > window.fromMs) {
+        ringBufferNote = `ring buffer earliest=${earliest} > window.fromMs=${window.fromMs}; older points unavailable (M10.1 v0.1)`;
+      }
+    }
+    if (pts.length < 2 * w + 1) {
+      return { changepoints: [], ringBufferNote: ringBufferNote ?? `need ≥${2 * w + 1} points; have ${pts.length}` };
+    }
+
+    // 2. Sort by ts
+    const sorted = [...pts].sort((a, b) => a.timestampMs - b.timestampMs);
+
+    // 3. Sliding-window deltas
+    const deltas: Array<{ ts: number; delta: number }> = [];
+    for (let t = w; t <= sorted.length - w; t++) {
+      const leftMean = vectorMean(sorted.slice(t - w, t).map((p) => p.value));
+      const rightMean = vectorMean(sorted.slice(t, t + w).map((p) => p.value));
+      const delta = vectorL2Distance(leftMean, rightMean);
+      const point = sorted[t];
+      if (point) deltas.push({ ts: point.timestampMs, delta });
+    }
+    if (deltas.length === 0) return { changepoints: [], ringBufferNote };
+
+    // 4. Adaptive threshold = max(2 × median(delta), tiny epsilon)
+    const sortedDeltas = [...deltas].map((d) => d.delta).sort((a, b) => a - b);
+    const median = sortedDeltas[Math.floor(sortedDeltas.length / 2)] ?? 0;
+    const max = sortedDeltas[sortedDeltas.length - 1] ?? 0;
+    const threshold = Math.max(median * 2, 1e-6);
+
+    // 5. Flag points exceeding threshold; assign confidence
+    const range = max - threshold;
+    const changepoints: Changepoint[] = [];
+    for (const d of deltas) {
+      if (d.delta > threshold) {
+        const confidence = range > 0 ? Math.max(0, Math.min(1, (d.delta - threshold) / range)) : 0.5;
+        changepoints.push({
+          timestampMs: d.ts,
+          confidence,
+          note: `delta=${d.delta.toFixed(4)} threshold=${threshold.toFixed(4)} median=${median.toFixed(4)}`,
+        });
+      }
+    }
+
+    // Optional: merge changepoints within `w` time-positions of each other,
+    // keeping the highest-confidence representative. Not implemented in v0.1
+    // — over-reporting is honest; a real consumer can post-filter.
+
+    return { changepoints, ringBufferNote };
   }
 
   async len(): Promise<number> {
@@ -351,7 +469,12 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks]);
+    const cpChecks = await TimeSeriesMemory._changepointProbe({
+      dimensions: this._options.dimensions,
+      distanceMetric: this._options.distanceMetric ?? 'Cosine',
+      ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+    });
+    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks, ...cpChecks]);
     return this._lastHealth;
   }
 
@@ -469,6 +592,59 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
     this._invocationCounts.set(method, (this._invocationCounts.get(method) ?? 0) + 1);
   }
 
+  /**
+   * Tier-3 probe for the changepoint detector. Inserts a known step
+   * function (10 baseline + 10 anomaly points), runs the detector, and
+   * asserts a changepoint is found within ±1 position of the known shift.
+   */
+  private static async _changepointProbe(opts: {
+    dimensions: number;
+    distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
+    bindingPath?: string;
+  }): Promise<readonly CheckResult[]> {
+    const result = await runCheck('changepointDetection', async () => {
+      const probe = await TimeSeriesMemory.create({
+        streamId: `__ruvsdk_probe_cp_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+        dimensions: opts.dimensions,
+        distanceMetric: opts.distanceMetric,
+        ...(opts.bindingPath !== undefined && { bindingPath: opts.bindingPath }),
+        changepointWindow: 3,
+      });
+      try {
+        // Build a clear step function: 10 points near oneHot(0), 10 near oneHot(1).
+        // Probe data is appended to the SDK-side ring buffer regardless of
+        // whether the upstream binding shares state (Finding B).
+        const T0 = Date.parse('2100-01-01T00:00:00Z'); // far-future
+        const oneHot = (i: number): Float32Array => {
+          const v = new Float32Array(opts.dimensions);
+          v[i % opts.dimensions] = 1;
+          return v;
+        };
+        const stepAt = T0 + 10 * 1000;
+        const points: TimeSeriesPoint[] = [];
+        for (let i = 0; i < 10; i++) points.push({ timestampMs: T0 + i * 1000, value: oneHot(0) });
+        for (let i = 0; i < 10; i++) points.push({ timestampMs: T0 + (10 + i) * 1000, value: oneHot(1) });
+        await probe.appendBatch(points);
+
+        const cps = await probe.detectChangepoints();
+        if (cps.length === 0) {
+          return { status: 'broken' as const, detail: 'no changepoints detected for clear step at i=10' };
+        }
+        // Find the changepoint closest to the known step
+        const closest = cps.reduce((best, c) => Math.abs(c.timestampMs - stepAt) < Math.abs(best.timestampMs - stepAt) ? c : best);
+        const offsetSec = Math.abs(closest.timestampMs - stepAt) / 1000;
+        // Allow ±1 position (1 second in this construction)
+        if (offsetSec > 1) {
+          return { status: 'broken' as const, detail: `top changepoint off by ${offsetSec.toFixed(0)}s from known step (expected ±1s)` };
+        }
+        return { status: 'ok' as const, detail: `${cps.length} cp(s); closest at ±${offsetSec.toFixed(0)}s, confidence=${closest.confidence.toFixed(2)}` };
+      } finally {
+        await probe.close();
+      }
+    }, 'archetype');
+    return [result];
+  }
+
   private coerceValue(value: TimeSeriesPoint['value']): Float32Array {
     if (value instanceof Float32Array) return value;
     if (Array.isArray(value)) {
@@ -481,4 +657,27 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
       'String and Record inputs require an embedder, which is deferred to v0.2.'
     );
   }
+}
+
+// ---------------- Helpers ----------------
+
+function vectorMean(vectors: readonly Float32Array[]): Float32Array {
+  if (vectors.length === 0) return new Float32Array();
+  const dims = vectors[0]?.length ?? 0;
+  const out = new Float32Array(dims);
+  for (const v of vectors) {
+    for (let i = 0; i < dims; i++) out[i]! += v[i] ?? 0;
+  }
+  for (let i = 0; i < dims; i++) out[i]! /= vectors.length;
+  return out;
+}
+
+function vectorL2Distance(a: Float32Array, b: Float32Array): number {
+  const len = Math.min(a.length, b.length);
+  let sum = 0;
+  for (let i = 0; i < len; i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    sum += d * d;
+  }
+  return Math.sqrt(sum);
 }

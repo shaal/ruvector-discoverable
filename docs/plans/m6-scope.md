@@ -194,6 +194,41 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M10.1 outcome (changepoint baseline; project `sdk-integration` count now 0)
+
+The last `sdk-integration` dormant capability flips to active. `TimeSeriesMemory.detectChangepoints()` and `query({ changepoints: true })` now run a real sliding-window mean-shift detector instead of throwing `NotImplementedError`. **Project-wide `sdk-integration` count: 1 → 0.**
+
+Algorithm (M10.1 baseline):
+- Maintain SDK-side ring buffer of the last N appended points (default 1000; configurable via `maxRecentForChangepoints`).
+- For each interior position `t` (with at least `_cpWindow=5` points on each side), compute `||leftMean - rightMean||` over the surrounding windows.
+- Adaptive threshold = `max(2 × median(deltas), 1e-6)`. Flag points exceeding threshold.
+- Confidence = `(delta - threshold) / (max - threshold)` clamped to `[0, 1]` (in-run-relative, not absolute).
+
+Demo verification (anomaly at minutes 12-16 in a 30-sample stream): detector returned 5 changepoints clustered at the boundaries. Top confidence 1.00 at minute 17 (falling edge); secondary 0.50 at minute 12 (rising edge). Mathematically correct — sliding-window mean shift detects boundaries, not anomaly interiors.
+
+Tier-3 probe: inserts 10 baseline + 10 anomaly points (clear step), runs detector, asserts a changepoint is found within ±1 second of the known step. Probe result: `5 cp(s); closest at ±0s, confidence=1.00`.
+
+**Project-wide value-report breakdown (across the three working archetypes):**
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration |
+|---|--:|--:|--:|--:|--:|
+| GraphReasoner | 3 | 5 | 4 | 1 (cypher) | 0 |
+| KnowledgeBase | 6 | 3 | 3 | 0 | 0 |
+| TimeSeriesMemory | 5 | 4 | 4 | 0 | 0 |
+| **Total** | **14** | **12** | **11** | **1** | **0** |
+
+The `sdk-integration` queue went from 2 (graphRag + sona) at M9.1 → 1 (sona) at M9 v0.1 → 1 (changepointDetection) at M10 v0.1 → **0** at M10.1. The remaining 12 dormant entries are all gated on someone else: upstream NAPI publishing (11) or an upstream Cypher-engine fix (1). The SDK has fulfilled every dormant capability it could ship from existing primitives.
+
+`changepointDetection.source = '@ruvector/sdk'` is the **first capability where the SDK itself is the source**, not just a wrapper around an upstream binding. Demonstrates the SDK can ship value before upstream is ready.
+
+Limitations declared in v0.1:
+- Bounded by ring buffer (default 1000 points). Older history needs delta-* bindings (still upstream-binding dormant). Window queries predating the buffer get a `ringBufferNote` in the explain trace.
+- Single-window detector — gradual drifts may not trigger. v0.2 could add CUSUM for slow drifts.
+- Adjacent peaks reported separately, not merged. v0.1 user can post-filter.
+- Threshold is heuristic (2× median); not calibrated to a false-positive rate.
+- Confidence is in-run-relative, not absolute.
+- Probe tolerance ±1 second is generous.
+
 ## Update — M10 v0.1 outcome (SONA wired; `sdk-integration` queue empty)
 
 The second `sdk-integration` dormant capability flips to active. `KnowledgeBase` now optionally takes `sona: true` (or a config object) at create-time; when wired, `retrieve()` warps the query embedding via `applyMicroLora` and begins a SONA trajectory; `recordFeedback()` ends the trajectory with the reward signal and ticks the engine for learning.

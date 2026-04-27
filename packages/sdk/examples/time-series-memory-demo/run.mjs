@@ -93,19 +93,23 @@ const r1 = await ts.query(anomalyVec, {
 console.log(`  ${r1.points.length} matches in narrow window`);
 console.log(`  (post-search filter — narrower windows drop more recall, see deltaIndexing dormant entry)`);
 
-console.log('\n[4] detectChangepoints() is deferred:');
-try {
-  await ts.detectChangepoints();
-} catch (e) {
-  console.log(`  expected: ${e.constructor.name}: ${e.message.split('\n')[0].slice(0, 110)}…`);
+console.log('\n[4] detectChangepoints() — M10.1 baseline (sliding-window mean shift):');
+const cps = await ts.detectChangepoints();
+console.log(`  ${cps.length} changepoint(s) detected`);
+for (const c of cps.slice(0, 6)) {
+  const minute = Math.round((c.timestampMs - T0) / ONE_MIN);
+  console.log(`    t=+${String(minute).padStart(2)}min  confidence=${c.confidence.toFixed(2)}  ${c.note ?? ''}`);
 }
+console.log(`  → expected: changepoints around minutes 11-12 and 16-17 (the anomaly boundaries)`);
 
-console.log('\n[5] query({ changepoints: true }) is also deferred (matching message):');
-try {
-  await ts.query(anomalyVec, { changepoints: true });
-} catch (e) {
-  console.log(`  expected: ${e.constructor.name}: ${e.message.split('\n')[0].slice(0, 110)}…`);
-}
+console.log('\n[5] query({ changepoints: true }) — combines retrieval + detection:');
+const r2 = await ts.query(anomalyVec, {
+  window: { fromMs: T0, toMs: T0 + 30 * ONE_MIN },
+  k: 5,
+  changepoints: true,
+});
+console.log(`  ${r2.points.length} matches; ${r2.changepoints.length} changepoints`);
+console.log(`  explain: ${r2.explain.path.join(' → ')}`);
 
 console.log('\nValue report (consults cached healthCheck):');
 const after = await ts.getValueReport();
