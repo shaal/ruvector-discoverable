@@ -33,10 +33,40 @@ interface RuvLLMConstructor {
 interface RuvLLMInstance {
   embed(text: string | readonly string[]): Promise<Float32Array | readonly Float32Array[]>;
   similarity(a: string, b: string): Promise<number>;
+  // M12 finding: generate returns a *plain string*, not the M5 GenerateResult
+  // shape. SDK wraps. Sync per upstream typedef but awaited defensively here.
+  generate(prompt: string, config?: NativeGenConfig): string | Promise<string>;
+  query(text: string, config?: NativeGenConfig): NativeQueryResponse | Promise<NativeQueryResponse>;
+  route(text: string): NativeRoutingDecision | Promise<NativeRoutingDecision>;
   stats(): Record<string, unknown>;
   hasSimd?(): boolean;
   simdCapabilities?(): unknown;
   isNativeLoaded?(): boolean;
+}
+
+interface NativeGenConfig {
+  readonly maxTokens?: number;
+  readonly temperature?: number;
+  readonly topP?: number;
+  readonly topK?: number;
+  readonly repetitionPenalty?: number;
+}
+
+export interface NativeQueryResponse {
+  readonly text: string;
+  readonly confidence: number;
+  readonly model: string;
+  readonly contextSize: number;
+  readonly latencyMs: number;
+  readonly requestId: string;
+}
+
+export interface NativeRoutingDecision {
+  readonly model: string;
+  readonly contextSize: number;
+  readonly temperature: number;
+  readonly topP: number;
+  readonly confidence: number;
 }
 
 export interface NativeRuvllmBackendOptions {
@@ -121,6 +151,37 @@ export class NativeRuvllmBackend {
     return this._llm.similarity(a, b);
   }
 
+  /**
+   * Generate text. M12 finding: the JS-layer `generate` returns a plain
+   * `string`, not the M5 `GenerateResult` object — wrapping happens at the
+   * archetype layer. This method returns the raw upstream string.
+   *
+   * **Quality caveat**: the published binding's NAPI `NativeConfig` has no
+   * model-path field, so default-loaded weights produce gibberish. The
+   * tier-1 `generateNonGibberish` smoke-check probe (added in M12.1) catches
+   * this from observation. See `docs/upstream-issues/05-no-model-loading-api.md`.
+   */
+  async generate(prompt: string, config: NativeGenConfig = {}): Promise<string> {
+    return await this._llm.generate(prompt, config);
+  }
+
+  /**
+   * Query with automatic routing. Returns the binding's `QueryResponse` shape
+   * verbatim (text + confidence + model + contextSize + latencyMs + requestId).
+   * Same model-quality caveat as `generate`.
+   */
+  async query(text: string, config: NativeGenConfig = {}): Promise<NativeQueryResponse> {
+    return await this._llm.query(text, config);
+  }
+
+  /**
+   * Routing-only — get the model + parameter recommendation for a query
+   * without running generation. Returns `RoutingDecision` shape.
+   */
+  async route(text: string): Promise<NativeRoutingDecision> {
+    return await this._llm.route(text);
+  }
+
   stats(): Record<string, unknown> {
     return this._llm.stats();
   }
@@ -197,6 +258,157 @@ export class NativeRuvllmBackend {
       return { status: 'broken', detail: `expected unit norm; got ${n.toFixed(4)}` };
     });
 
+    // M12.1 — three new binding-tier probes that observe generate/query/route
+    // contract. The first (generateNonGibberish) is the load-bearing flip
+    // signal: defaults to broken (upstream binding has no model_path config),
+    // and will auto-flip to ok when upstream wires real weights or a model
+    // loader. Same M6.2 self-correcting pattern as the Cypher stub.
+
+    const nativeLoaded = probe.isNativeLoaded?.() ?? false;
+
+    const genNonGibberish = await runCheck('generateNonGibberish', async () => {
+      if (!nativeLoaded) {
+        // M12 finding: the JS fallback returns a help message that's ≥80%
+        // alphanumeric, which would pass the assertion as a false positive.
+        // Require native to be loaded; otherwise mark unsupported.
+        return { status: 'unsupported', detail: 'isNativeLoaded()=false; binding running in JS fallback mode' };
+      }
+      const out = await probe.generate('Once upon a time', { maxTokens: 20 });
+      if (typeof out !== 'string') {
+        return { status: 'broken', detail: `expected string, got ${typeof out}` };
+      }
+      const trimmed = out.trim();
+      if (trimmed.length === 0) {
+        return { status: 'broken', detail: 'generate returned empty string' };
+      }
+
+      // Three conjunctive assertions. M12.1 first attempt used only the
+      // alphanumeric-ratio check at ≥80% and FALSE-POSITIVED on observed
+      // gibberish ("hadeachqthat##lyallhad...") because the model emits
+      // letter-noise with very few spaces — 82% alphanumeric, but barely
+      // any whitespace and run-on word-like fragments. Real English text
+      // has ~15-18% whitespace and avg word length ~5 chars.
+
+      // Assertion 1: ≥ 80% alphanumeric + whitespace (catches non-text
+      // punctuation noise like "##*}{[")
+      let alnumWs = 0;
+      for (const ch of trimmed) {
+        if (/[A-Za-z0-9\s]/.test(ch)) alnumWs++;
+      }
+      const alnumRatio = alnumWs / trimmed.length;
+
+      // Assertion 2: ≥ 8% whitespace (real English ≥ 12% typically; 8%
+      // gives buffer for short outputs). Catches "letter-noise without
+      // spaces" failure mode that broke the v1 probe.
+      let ws = 0;
+      for (const ch of trimmed) {
+        if (/\s/.test(ch)) ws++;
+      }
+      const wsRatio = ws / trimmed.length;
+
+      // Assertion 3: longest run of non-whitespace ≤ 25 chars (longest
+      // English word is ~20; real text rarely exceeds 25 between spaces).
+      let curRun = 0;
+      let maxRun = 0;
+      for (const ch of trimmed) {
+        if (/\s/.test(ch)) { curRun = 0; }
+        else { curRun++; if (curRun > maxRun) maxRun = curRun; }
+      }
+
+      const sample = trimmed.slice(0, 40).replace(/\s+/g, ' ');
+      const detailBase = `alnum/ws=${(alnumRatio * 100).toFixed(0)}%, ws=${(wsRatio * 100).toFixed(0)}%, longest-run=${maxRun} chars`;
+
+      if (alnumRatio < 0.8) {
+        return {
+          status: 'broken',
+          detail: `${detailBase} — ${(alnumRatio * 100).toFixed(0)}% alphanumeric/whitespace (need ≥80%). Sample: "${sample}${trimmed.length > 40 ? '...' : ''}". NAPI binding has no model_path config (see upstream-issues/05).`,
+        };
+      }
+      if (wsRatio < 0.08) {
+        return {
+          status: 'broken',
+          detail: `${detailBase} — only ${(wsRatio * 100).toFixed(1)}% whitespace (need ≥8%); real English text has ~15%. Sample: "${sample}${trimmed.length > 40 ? '...' : ''}". NAPI binding has no model_path config (see upstream-issues/05).`,
+        };
+      }
+      if (maxRun > 25) {
+        return {
+          status: 'broken',
+          detail: `${detailBase} — longest non-whitespace run is ${maxRun} chars (longest English word ≈ 20). Sample: "${sample}${trimmed.length > 40 ? '...' : ''}". NAPI binding has no model_path config (see upstream-issues/05).`,
+        };
+      }
+      return {
+        status: 'ok',
+        detail: `${detailBase} — ${trimmed.length} chars; passes all three assertions`,
+      };
+    });
+
+    const queryBounded = await runCheck('queryConfidenceBounded', async () => {
+      if (!nativeLoaded) {
+        return { status: 'unsupported', detail: 'isNativeLoaded()=false; binding running in JS fallback mode' };
+      }
+      const r = await probe.query('What is machine learning?');
+      if (typeof r !== 'object' || r === null) {
+        return { status: 'broken', detail: `expected object, got ${typeof r}` };
+      }
+      const conf = r.confidence;
+      if (typeof conf !== 'number' || !Number.isFinite(conf)) {
+        return { status: 'broken', detail: `confidence is not a finite number: ${conf}` };
+      }
+      if (conf < 0 || conf > 1) {
+        return { status: 'broken', detail: `confidence=${conf.toFixed(4)} out of [0,1]` };
+      }
+      // M12.1 finding: the JS-layer wrapper claims to return 6 fields but the
+      // upstream native QueryResponse struct only populates 3 (text, confidence,
+      // model). The wrapper passes `result.context_size` etc. through, getting
+      // `undefined`. Probe enumerates which fields are missing for actionable
+      // diagnostic. This is a separate upstream defect from the model-loading
+      // issue (#05) — should be filed as #06.
+      const missing: string[] = [];
+      if (typeof r.text !== 'string') missing.push(`text(${typeof r.text})`);
+      if (typeof r.model !== 'string') missing.push(`model(${typeof r.model})`);
+      if (typeof r.contextSize !== 'number') missing.push(`contextSize(${typeof r.contextSize})`);
+      if (typeof r.latencyMs !== 'number') missing.push(`latencyMs(${typeof r.latencyMs})`);
+      if (typeof r.requestId !== 'string') missing.push(`requestId(${typeof r.requestId})`);
+      if (missing.length > 0) {
+        return {
+          status: 'broken',
+          detail: `confidence ok (${conf.toFixed(3)}) but missing/wrong-type fields: ${missing.join(', ')}. Native QueryResponse struct under-populated — separate from upstream-issues/05.`,
+        };
+      }
+      return { status: 'ok', detail: `confidence=${conf.toFixed(3)}; model='${r.model}'; ${r.text.length}-char text; latency=${r.latencyMs.toFixed(2)}ms` };
+    });
+
+    const routeShape = await runCheck('routeDecisionShape', async () => {
+      if (!nativeLoaded) {
+        return { status: 'unsupported', detail: 'isNativeLoaded()=false; binding running in JS fallback mode' };
+      }
+      const r = await probe.route('build a vector database');
+      if (typeof r !== 'object' || r === null) {
+        return { status: 'broken', detail: `expected object, got ${typeof r}` };
+      }
+      const missing: string[] = [];
+      if (typeof r.model !== 'string') missing.push(`model(${typeof r.model})`);
+      if (typeof r.contextSize !== 'number') missing.push(`contextSize(${typeof r.contextSize})`);
+      if (typeof r.temperature !== 'number') {
+        missing.push(`temperature(${typeof r.temperature})`);
+      } else if (r.temperature < 0 || r.temperature > 2) {
+        return { status: 'broken', detail: `temperature=${r.temperature} out of [0,2]` };
+      }
+      if (typeof r.topP !== 'number') {
+        missing.push(`topP(${typeof r.topP})`);
+      } else if (r.topP < 0 || r.topP > 1) {
+        return { status: 'broken', detail: `topP=${r.topP} out of [0,1]` };
+      }
+      if (typeof r.confidence !== 'number') missing.push(`confidence(${typeof r.confidence})`);
+      if (missing.length > 0) {
+        return {
+          status: 'broken',
+          detail: `RoutingDecision missing/wrong-type fields: ${missing.join(', ')}. Native struct under-populated (same defect as queryConfidenceBounded).`,
+        };
+      }
+      return { status: 'ok', detail: `model='${r.model}', T=${r.temperature.toFixed(2)}, topP=${r.topP.toFixed(2)}, conf=${r.confidence.toFixed(2)}` };
+    });
+
     const monotonic = await runCheck('similarityMonotonic', async () => {
       const related = await probe.similarity('cat', 'dog');
       const unrelated = await probe.similarity('cat', 'banana');
@@ -215,7 +427,7 @@ export class NativeRuvllmBackend {
       };
     });
 
-    return [determ, norm, monotonic];
+    return [determ, norm, monotonic, genNonGibberish, queryBounded, routeShape];
   }
 }
 

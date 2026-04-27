@@ -1,6 +1,6 @@
 # Upstream issue reports
 
-These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI bindings (M6 → M10 in `m6-scope.md`).
+These markdown files are paste-ready bug reports for `github.com/ruvnet/ruvector`. Each consolidates one or more findings the SDK accumulated while integrating against upstream NAPI bindings (M6 → M12 in `m6-scope.md`).
 
 The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smoke-check `[observed via probe]` strings) is the evidence in each report — that infrastructure was built precisely so that observations would convert directly into reproducible upstream issues.
 
@@ -19,6 +19,7 @@ The SDK's diagnostic output (`getValueReport()`, `healthCheck().checks`, the smo
 | [`02-broken-umbrella-packages.md`](02-broken-umbrella-packages.md) | Publishing pipeline | `ruvector@0.2.23`, `@ruvector/sona@0.1.6` |
 | [`03-core-vectordb-construction-quirks.md`](03-core-vectordb-construction-quirks.md) | API design | `@ruvector/core@2.2.0` |
 | [`04-sona-microlora-warmup.md`](04-sona-microlora-warmup.md) | Behavior + docs | `@ruvector/sona@0.1.6` |
+| [`05-no-model-loading-api.md`](05-no-model-loading-api.md) | API gap | `@ruvector/ruvllm@2.5.4`, `@ruvector/ruvllm-darwin-arm64@2.0.1` |
 
 ## How the SDK found these
 

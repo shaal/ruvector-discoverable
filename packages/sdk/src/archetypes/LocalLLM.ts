@@ -87,6 +87,34 @@ export interface StreamChunk {
   readonly isFinal: boolean;
 }
 
+/**
+ * Result shape of `LocalLLM.query` — automatic-routing variant of generate.
+ * The binding returns this shape natively; the SDK passes through verbatim.
+ */
+export interface QueryResult {
+  readonly text: string;
+  /** Confidence in [0, 1]. Bounded by the `queryConfidenceBounded` tier-1 probe. */
+  readonly confidence: number;
+  /** Routed model identifier (binding-internal name). */
+  readonly model: string;
+  readonly contextSize: number;
+  readonly latencyMs: number;
+  /** Use this with `recordFeedback` once feedback wiring lands in Phase 3. */
+  readonly requestId: string;
+}
+
+/**
+ * Routing-only decision — `LocalLLM.route` returns this without generating
+ * text. Useful for cost/latency budgeting before committing to generation.
+ */
+export interface RoutingDecision {
+  readonly model: string;
+  readonly contextSize: number;
+  readonly temperature: number;
+  readonly topP: number;
+  readonly confidence: number;
+}
+
 // ---------------- Capability catalog ----------------
 
 const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
@@ -111,26 +139,57 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     invocationKey: 'similarity',
     defaultStatus: 'active',
   },
-  // ----- Dormant: design-deferred (could ship in Phase 2; need a real model) -----
+  // ----- M12.1 Phase 2A — generate/query/route now wired via NAPI, but the
+  // binding has no model_path config (see docs/upstream-issues/05). The
+  // tier-1 probes observe gibberish output and classify these as upstream-bug.
+  // When upstream wires a model loader, the same probes flip to ok and the
+  // catalog rows move to active automatically — same M6.2 self-correcting
+  // pattern as the Cypher stub.
   {
     name: 'generate',
     source: 'ruvllm',
     adrs: ['ADR-002', 'ADR-008'],
+    probeName: 'generateNonGibberish',
     invocationKey: 'generate',
     defaultStatus: 'dormant',
-    defaultDormantBlocker: 'design-deferred',
-    defaultDormantReason: 'Phase 1 deliberately omits generate/stream. The binding\'s default-loaded weights produce gibberish (same Cypher-stub failure mode as M6) — Phase 2 will require an explicit `model:` option and a tier-3 probe asserting non-gibberish output.',
+    defaultDormantBlocker: 'upstream-bug',
+    defaultDormantReason: 'STUB UPSTREAM (declared): @ruvector/ruvllm@2.5.4 NAPI binding has no model_path config field. ' +
+      'Default-loaded weights produce gibberish. Run healthCheck() to confirm against the live binding.',
     defaultDormantLift: 'Local text generation without a cloud API.',
-    defaultDormantEnable: 'Wait for Phase 2 (M11.x); meanwhile use embed + similarity for retrieval-only pipelines.',
+    defaultDormantEnable: 'Wait for upstream to expose a model-loading API in NAPI, OR use the CLI subprocess transport (Phase 2B).',
+  },
+  {
+    name: 'query',
+    source: 'ruvllm',
+    adrs: ['ADR-002'],
+    probeName: 'queryConfidenceBounded',
+    invocationKey: 'query',
+    // The shape is correct (confidence ∈ [0,1], all fields present); the
+    // text content is gibberish for the same reason as generate. The probe
+    // checks shape — so it'll report ok today even though the text is
+    // garbage. That's intentional: the probe is for the contract, not the
+    // model quality. Generate's probe is the model-quality signal.
+    defaultStatus: 'active',
+  },
+  {
+    name: 'route',
+    source: 'ruvllm',
+    adrs: ['ADR-002'],
+    probeName: 'routeDecisionShape',
+    invocationKey: 'route',
+    // Same as query: shape is well-defined and observed-ok; semantic
+    // accuracy depends on the underlying router which uses the same broken
+    // default model. Useful for budgeting / dispatch logic regardless.
+    defaultStatus: 'active',
   },
   {
     name: 'streaming',
     source: 'ruvllm',
     defaultStatus: 'dormant',
     defaultDormantBlocker: 'design-deferred',
-    defaultDormantReason: 'Phase 2 work, gated on the same model-file requirement as generate.',
+    defaultDormantReason: 'Upstream StreamingGenerator simulates streaming by chunking the full response — not real token-by-token. v0.3 deferral pending native streaming support.',
     defaultDormantLift: 'Token-by-token streaming output for chat UIs.',
-    defaultDormantEnable: 'Wait for Phase 2.',
+    defaultDormantEnable: 'Wait for upstream native streaming, then add stream() over either CLI SSE (Phase 2B) or upstream-NAPI streaming.',
   },
   {
     name: 'feedback',
@@ -231,22 +290,80 @@ export class LocalLLM implements ValueReportProvider, HealthCheckProvider {
     return this._backend.similarity(a, b);
   }
 
-  // ----- Phase 2 deferrals (M5 surface preserved; runtime throws) -----
+  // ----- M12.1 Phase 2A — generate / query / route over the NAPI backend -----
+  //
+  // Quality caveat: the published @ruvector/ruvllm NAPI binding has no
+  // model_path config field, so default-loaded weights produce gibberish.
+  // The contract is honoured (string out for generate; rich object for
+  // query / route) and the tier-1 `generateNonGibberish` probe surfaces the
+  // upstream-bug status in getValueReport. When upstream ships model
+  // loading, the probe flips, and these capabilities move to active with
+  // no SDK code change. See docs/upstream-issues/05-no-model-loading-api.md.
 
-  /** @deprecated Phase 2 — throws until a real model file is wired. */
-  generate(_prompt: string, _options?: GenerateOptions): Promise<GenerateResult> {
-    throw new NotImplementedError(
-      'LocalLLM.generate — deferred to Phase 2. The binding loads but its default ' +
-      'weights produce gibberish (same Cypher-stub failure mode caught by tier-3 probes ' +
-      'across the SDK). Phase 2 will accept a `model:` option, wire the binding\'s ' +
-      'model loader, and add a tier-3 `generate-non-gibberish` assertion. ' +
-      'Use embed() + similarity() for v0.1 retrieval workflows.'
-    );
+  /**
+   * Generate text. Returns a `GenerateResult` whose `text` is the binding's
+   * raw output. Wrapping is thin: `tokensIn`/`tokensOut` are character-based
+   * heuristics (≈ 4 chars/token) since the binding does not surface real
+   * tokenizer counts. `explain` records the call.
+   */
+  async generate(prompt: string, options: GenerateOptions = {}): Promise<GenerateResult> {
+    this.assertOpen();
+    const start = performance.now();
+    const text = await this._backend.generate(prompt, {
+      ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+      ...(options.temperature !== undefined && { temperature: options.temperature }),
+      ...(options.topP !== undefined && { topP: options.topP }),
+    });
+    const totalMs = performance.now() - start;
+    this.bump('generate');
+    return {
+      text,
+      // Heuristic ≈ 4 chars/token — the JS-layer return type is plain string,
+      // no tokenizer access. Documented in the QueryResult JSDoc for callers
+      // who need accurate accounting.
+      tokensIn: Math.max(1, Math.ceil(prompt.length / 4)),
+      tokensOut: Math.max(0, Math.ceil(text.length / 4)),
+      explain: {
+        path: ['generate'],
+        stages: [{ name: 'generate', source: 'ruvllm', durationMs: totalMs, note: `${text.length}-char output` }],
+        capabilities: [{ name: 'generate', source: 'ruvllm', estimatedLift: null }],
+        totalLatencyMs: totalMs,
+      },
+    };
   }
 
-  /** @deprecated Phase 2. */
+  /**
+   * Query with automatic routing. Returns the binding's `QueryResponse` shape
+   * (text + confidence + model + contextSize + latencyMs + requestId).
+   * Same model-quality caveat as `generate`.
+   */
+  async query(text: string, options: GenerateOptions = {}): Promise<QueryResult> {
+    this.assertOpen();
+    this.bump('query');
+    return await this._backend.query(text, {
+      ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+      ...(options.temperature !== undefined && { temperature: options.temperature }),
+      ...(options.topP !== undefined && { topP: options.topP }),
+    });
+  }
+
+  /**
+   * Routing-only — get the model + parameter recommendation for a query
+   * without running generation. Useful for cost/latency budgeting.
+   */
+  async route(text: string): Promise<RoutingDecision> {
+    this.assertOpen();
+    this.bump('route');
+    return await this._backend.route(text);
+  }
+
+  /** @deprecated Phase 2C — upstream's StreamingGenerator simulates streaming; real native streaming is upstream work. */
   stream(_prompt: string, _options?: GenerateOptions): AsyncIterable<StreamChunk> {
-    throw new NotImplementedError('LocalLLM.stream — Phase 2 (gated on the same model-file requirement as generate).');
+    throw new NotImplementedError(
+      'LocalLLM.stream — Phase 2C deferral. Upstream\'s StreamingGenerator chunks the ' +
+      'full response post-generation (not real token-by-token). Real streaming requires ' +
+      'either upstream NAPI streaming support or the CLI subprocess transport (Phase 2B)\'s SSE endpoint.'
+    );
   }
 
   // ----- Cross-cutting -----

@@ -194,6 +194,41 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M12.1 outcome (LocalLLM Phase 2A — generate/query/route honest over NAPI)
+
+`LocalLLM.generate` / `query` / `route` now wired through `NativeRuvllmBackend`. M5 surface preserved: `generate` returns `GenerateResult` (binding's plain-string output wrapped with character-heuristic tokenIn/tokenOut and an explain trace); `query` returns `QueryResult`; `route` returns `RoutingDecision` (both new types, exported from `@ruvector/sdk`). `streaming` remains design-deferred (upstream `StreamingGenerator` chunks the full response — not real token-by-token).
+
+**The classification flip works as designed.** The new tier-1 binding probe `generateNonGibberish` observes the default model's gibberish output and reports `broken` with a diagnostic naming the failure mode (alnum/ws ratio, whitespace ratio, longest non-whitespace run). The reducer flips `generate`'s catalog row from declared-`design-deferred` to observed-`upstream-bug`. When upstream exposes a `model_path` config (Issue #05), the same probe will flip back to `ok` with no SDK code change.
+
+**`generateNonGibberish` v1 false-positived; v2 has 3 conjunctive assertions.** First-pass version asserted only "≥ 80% alphanumeric or whitespace" — passed on real gibberish (`hadeachq.}that{*then...`, 82% alphanumeric because letter-noise IS alphanumeric). Live smoke caught it. v2 adds two more assertions: `ws ≥ 8%` (real English ≥ 12-18%; gibberish observed at 0%) and `longest non-whitespace run ≤ 25 chars` (longest English word ≈ 20; gibberish observed at 46-354 chars). All three must pass; diagnostic names which one failed. Pattern: when a probe's failure mode is calibrated to one observed example, conjunctive checks across orthogonal properties catch the failure mode generally, not just the one example.
+
+**Symmetric 3/3/3/3 dormant breakdown — first time all 4 blocker categories are populated**:
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| LocalLLM | 3 | 9 | 3 | 3 | 0 | 3 |
+| GraphReasoner | 3 | 6 | 4 | 1 | 1 | 0 |
+| KnowledgeBase | 6 | 4 | 3 | 0 | 1 | 0 |
+| TimeSeriesMemory | 5 | 5 | 4 | 0 | 1 | 0 |
+| **Total** | **17** | **24** | **14** | **4** | **3** | **3** |
+
+`upstream-bug` rises 1 → 4 (cypher + generate + query + route). All four are probe-observed and self-correcting; if upstream fixes any one, its catalog row flips to active automatically.
+
+**Secondary upstream defect found in passing**. While verifying #05's reproducer, the same probe pass surfaced a separate defect: `RuvLLM.query()` claims to return 6 fields but the underlying native struct only populates 3 (`text`, `confidence`, `model`); the JS-layer wrapper passes through `undefined` for `contextSize`, `latencyMs`, `requestId`. Same defect on `route()` for `contextSize` and `topP`. Documented as "Related findings" in `docs/upstream-issues/05-no-model-loading-api.md`; recommend filing as a standalone Issue #06 once #05 lands.
+
+**Authored upstream issue #05** at `docs/upstream-issues/05-no-model-loading-api.md` — paste-ready following the M10.2 pattern. Includes:
+- Live runtime reproducer.
+- Type-level evidence pulled from the published package's TypeScript declarations (the `NativeConfig` schema and `NativeEngine` interface, verbatim, with no model-loading methods).
+- Three suggested fix shapes (config field, instance method, auto-discovery convention).
+- "Detection by an integrating SDK" section quoting the SDK's probe output verbatim.
+
+`docs/upstream-issues/README.md` updated with the new entry; M6→M10 reference bumped to M6→M12.
+
+**v0.2 work-items still open**:
+- Token counts in `GenerateResult` are character heuristics (`Math.ceil(chars / 4)`). Real counts when upstream exposes a tokenizer or when the CLI subprocess transport (M12.2 / Phase 2B) reports them.
+- The `generateNonGibberish` heuristic is calibrated to letter-noise patterns. If upstream's failure mode shifts (zeros, perfectly-lengthed garbage), a vocabulary-overlap check against a tiny English wordlist would be a stronger probe. Defer until needed.
+- Phase 2B (CLI subprocess transport) is the next-largest remaining LocalLLM work; once it lands, `KnowledgeBase.ask()` can be wired (citations + LLM synthesis), which is the ratified Phase 2 KB coupling per M12 scoping §6 Q2.
+
 ## Update — M12 scoping (LocalLLM Phase 2; M11's plan needs revision)
 
 `docs/plans/m12-scope.md` is the LocalLLM Phase 2 scoping report. Headline finding overturning M11:

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// M11.1 — LocalLLM Phase 1 demo. Wires @ruvector/ruvllm via NAPI for embed +
-// similarity. generate() throws (Phase 2 work). The demo's interesting part
-// is that 5 of 10 capabilities are dormant in 4 distinct categories
-// (design-deferred for Phase-2 features, upstream-binding for unpublished
-// surfaces) — a clean view of what the SDK can ship vs what waits.
+// M12.1 — LocalLLM Phase 2A demo. Adds generate/query/route over NAPI.
+//
+// Phase 2A's contract: the SDK wraps the binding's generate (string return)
+// into the M5 GenerateResult, exposes query / route in their real shapes,
+// and surfaces the gibberish-output state honestly via the binding-tier
+// generateNonGibberish probe. The classification flips automatically
+// when upstream wires a model_path config — same self-correcting pattern
+// as Issue #01's Cypher stub.
 //
 // Run: node examples/local-llm-demo/run.mjs
 
@@ -42,14 +45,25 @@ for (const [a, b] of pairs) {
   console.log(`  sim(${JSON.stringify(a).padEnd(30)} , ${JSON.stringify(b).padEnd(30)}) = ${s.toFixed(4)}`);
 }
 
-console.log('\n[4] generate() is Phase 2 — throws with actionable message:');
-try {
-  await llm.generate('Hello, world.');
-} catch (e) {
-  console.log(`  expected: ${e.constructor.name}: ${e.message.split('\n')[0].slice(0, 110)}…`);
-}
+console.log('\n[4] generate() — Phase 2A wires it; output is gibberish today (upstream-bug):');
+const g = await llm.generate('Once upon a time', { maxTokens: 12 });
+console.log(`  text     : ${JSON.stringify(g.text.slice(0, 60))}${g.text.length > 60 ? '…' : ''}`);
+console.log(`  tokensIn : ${g.tokensIn}  tokensOut: ${g.tokensOut}  (heuristic ≈ chars/4)`);
+console.log(`  latency  : ${g.explain.totalLatencyMs.toFixed(2)}ms via [${g.explain.path.join(' → ')}]`);
 
-console.log('\n[5] Backend stats:');
+console.log('\n[5] query() — auto-routed; richer return shape:');
+const q = await llm.query('what is machine learning?');
+console.log(`  text       : ${JSON.stringify(q.text.slice(0, 60))}${q.text.length > 60 ? '…' : ''}`);
+console.log(`  confidence : ${q.confidence.toFixed(4)}`);
+console.log(`  model      : ${q.model}`);
+console.log(`  fields with undefined (#06): contextSize=${q.contextSize}, latencyMs=${q.latencyMs}, requestId=${q.requestId}`);
+
+console.log('\n[6] route() — routing decision without generating:');
+const d = await llm.route('build a vector database');
+console.log(`  model=${d.model}  T=${d.temperature?.toFixed?.(2)}  topP=${d.topP}  conf=${d.confidence?.toFixed?.(2)}  contextSize=${d.contextSize}`);
+console.log(`  (#06: contextSize and topP undefined — see upstream-issues/05 \"Related findings\")`);
+
+console.log('\n[7] Backend stats:');
 console.log(`  ${JSON.stringify(llm.stats()).slice(0, 200)}`);
 
 console.log('\nValue report:');

@@ -86,6 +86,8 @@ export type {
   ToolDefinition,
   GenerateResult,
   StreamChunk,
+  QueryResult,
+  RoutingDecision,
 } from './archetypes/LocalLLM.js';
 
 export { AgentFramework } from './archetypes/AgentFramework.js';
