@@ -38,6 +38,13 @@ interface CombinedProvider {
 export interface AuditOptions {
   readonly configPath: string;
   readonly out?: NodeJS.WritableStream;
+  /**
+   * v0.2: when set, treats this as the workload key — anchoring the audit
+   * even if the config does not export `_meta.workload`. Hand-written configs
+   * become auditable without modification. If `_meta.workload` is also
+   * present, this override wins (and a note is printed).
+   */
+  readonly workloadOverride?: string;
 }
 
 export interface AuditDrift {
@@ -91,16 +98,24 @@ export async function runAudit(options: AuditOptions): Promise<AuditReport> {
 
   // _meta.workload is the audit anchor — without it, we don't know what
   // template to compare against. Configs from `sdk recommend` (M15.2) bake
-  // it in automatically; hand-written configs need to add it explicitly.
+  // it in automatically. v0.2: hand-written configs can pass --workload at
+  // the CLI to inject the anchor without modifying the file.
   const meta = mod._meta;
-  const workloadKey = meta?.workload;
+  const declaredWorkload = meta?.workload;
+  const workloadKey = options.workloadOverride ?? declaredWorkload;
+  if (options.workloadOverride && declaredWorkload && options.workloadOverride !== declaredWorkload) {
+    write(`! audit: --workload override "${options.workloadOverride}" supersedes _meta.workload "${declaredWorkload}".`);
+  } else if (options.workloadOverride && !declaredWorkload) {
+    write(`! audit: --workload "${options.workloadOverride}" injected (config has no _meta.workload).`);
+  }
   if (!workloadKey) {
     write('');
     write('⚠ audit: config does not export `_meta.workload`.');
     write('  Audit needs `_meta = { workload: "<key>" }` to know which best-practice template to compare against.');
     write('  Either:');
-    write('    (a) regenerate the config via `sdk recommend` (M15.2 bakes _meta automatically), OR');
-    write('    (b) add `export const _meta = { workload: "<key>" }` to your existing config.');
+    write('    (a) regenerate the config via `sdk recommend` (which bakes _meta automatically), OR');
+    write('    (b) add `export const _meta = { workload: "<key>" }` to your existing config, OR');
+    write('    (c) re-run audit with `--workload <key>` to inject the anchor for this run.');
     write(`  Workload keys: ${require_keys().join(', ')}`);
     return { workload: null, recommended: [], observed: [], drifts: [] };
   }

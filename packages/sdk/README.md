@@ -4,7 +4,7 @@ Task-first archetypes over upstream [`ruvector`](https://github.com/ruvnet/ruvec
 
 The SDK's premise: developers reach for `VectorDB` and stop, missing 95% of upstream's unique capability. The fix is a TypeScript surface that names each capability, surfaces the dormant ones with their blockers, and ships the cross-archetype glue that makes "RAG with Graph relations + continual learning" a one-line wire-up instead of a research project.
 
-Status: pre-1.0. The full headline-archetype frontier is implemented, the CLI is complete, but several upstream NAPI bindings the SDK names are not yet published — see [Known gaps](#known-gaps) for the honest list. Every gap is observable via `getValueReport()` and trackable via `tools/reprobe-bindings/reprobe.mjs`; the SDK's blocker-classification gives you a precise map of what's pending.
+> **Status — v0.2 / pre-publish.** The package is **not yet on npm.** `npm install @ruvector/sdk` will fail today; the [Install](#install) section's command is the published-state target, not the current reality. To use the SDK now, clone this repo, run `npm install && npm run build` inside `packages/sdk/`, and either link the package locally (`npm link`) or generate configs against an in-repo SDK path via `sdk recommend --local-sdk-path <path-to-packages/sdk>`. The full v1.0 archetype + CLI surface is **implemented and verified** — what's pre-publish is the npm distribution, not the code. Every blocked capability is observable via `getValueReport()` and trackable via [`tools/reprobe-bindings/reprobe.mjs`](../../tools/reprobe-bindings/reprobe.mjs).
 
 ---
 
@@ -139,6 +139,15 @@ sdk recommend \
   --out ./ruvector.config.ts
 ```
 
+For in-repo / pre-publish development, point `--local-sdk-path` at the SDK package directory; the generated config's import will resolve relative to the output file's location:
+
+```bash
+sdk recommend --workload rag-over-docs ... \
+  --out ./demo/ruvector.config.ts \
+  --local-sdk-path ../../packages/sdk
+# → generated config imports from '../../packages/sdk/dist/index.js' instead of '@ruvector/sdk'
+```
+
 Output names what was recommended AND what was skipped (with the dormant blocker reason verbatim from the catalog), so you know exactly what's active vs waiting:
 
 ```
@@ -179,6 +188,18 @@ sdk audit ./ruvector.config.ts
 ```
 
 Three drift kinds: `missing-archetype`, `extra-archetype`, `missing-coupling`. Plus advisory `sdk-integration-suggestion` rows. Exit code is 1 on blocking drifts (CI-gateable), 0 on clean / advisory-only.
+
+For hand-written configs without `_meta.workload`, pass `--workload <key>` to anchor the audit at the right template:
+
+```bash
+sdk audit ./my-handwritten-config.ts --workload rag-over-docs
+```
+
+Use `--strict` to elevate `sdk-integration-suggestion` rows to blocking (exit 1 on any advisory). Useful for CI gates that want every coupling wired:
+
+```bash
+sdk audit ./ruvector.config.ts --strict
+```
 
 ---
 
@@ -321,7 +342,7 @@ A few patterns surfaced repeatedly across milestones and are worth knowing about
 
 ## License
 
-MIT (matching upstream `ruvector`).
+[MIT](../../LICENSE) (matching upstream `ruvector`).
 
 ## Contributing
 

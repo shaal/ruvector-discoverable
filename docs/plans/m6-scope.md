@@ -194,6 +194,82 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — v0.2 polish batch outcome (LICENSE + Status callout + 3 CLI flags)
+
+Five v0.2 loose-end items shipped in one milestone commit, closing the trail
+that accumulated across M14.1 / M15.2 / M15.3 / M16:
+
+1. **`LICENSE`** at repo root (MIT 2026 Ofer Shaal). `package.json` declared
+   MIT but no file existed; the M16 README had to drop a `../../LICENSE`
+   link as a result. Link is now reinstated in `packages/sdk/README.md`.
+2. **"Status — v0.2 / pre-publish" callout** near the top of
+   `packages/sdk/README.md`, replacing the weak inline `Status: pre-1.0`
+   line. Tells the user explicitly that `npm install @ruvector/sdk` does
+   not work today and points at `--local-sdk-path` (item 4) as the
+   pre-publish workaround.
+3. **`sdk audit --workload <key>`** for hand-written configs. Audit
+   previously bailed with a help message when `_meta.workload` was absent
+   (M15.3 logged this). Now `--workload` synthesizes the anchor at audit
+   time without modifying the user's config — non-destructive injection.
+   Override semantics: when both are present, flag wins and a `!` line
+   names the supersession; when only the flag, a `!` line confirms the
+   injection. Both sub-cases drift-by-inversion-tested.
+4. **`sdk recommend --local-sdk-path <path>`** for in-repo / pre-publish
+   development (M15.2 logged this). Generated configs imported from
+   `'@ruvector/sdk'` unconditionally, which fails until the package
+   publishes. The flag accepts an SDK package directory; codegen appends
+   `/dist/index.js` and emits the path relative to the output file's
+   directory — so the generated config works regardless of where the user
+   `--out`'s it. Verified from a non-SDK cwd (`/tmp/v02-test`) that the
+   resolved relative import correctly traverses macOS `/private/tmp`
+   symlinks and points at the real `dist/index.js`.
+5. **`sdk audit --strict`** elevates `sdk-integration-suggestion` rows
+   from advisory (exit 0) to blocking (exit 1) (M15.3 logged this).
+   Useful for CI gates that want every recommended coupling wired.
+   Drift-by-inversion verified: same advisory-only sample-config exits
+   0 without and 1 with; the existing incomplete-config still exits 1
+   regardless of `--strict`, confirming no regression on blocking drifts.
+
+**Net code impact**: ~110 LOC across 5 files (`LICENSE` 21 lines, README
+section ~25 lines, `audit.ts` ~15 lines, `recommend.ts` ~20 lines,
+`bin/sdk.js` ~25 lines). Each item ~30-60 LOC, bundled because individually
+each is too small to merit a milestone but together they close a coherent
+"polish" surface.
+
+**Caught live during testing — methodology, not code**: the first `--strict`
+inversion test reported `exit=0` for both with and without flag, which
+seemed to falsify the change. The pipe `node ... | tail -20; echo $?`
+captures `tail`'s exit code, not `node`'s. Re-ran with `> log 2>&1; echo $?`
+(no pipe) and the strict-vs-non-strict split appeared as designed. Worth
+remembering: drift-by-inversion needs exit-code capture from the actual
+process, not the tail of its output.
+
+**`bin/sdk.js` flag-parser refactor** to support boolean flags. Previous
+`parseFlags` consumed the next token unconditionally, which would have
+swallowed the next argument after `--strict`. Added a `BOOLEAN_FLAGS` set
+so `--strict` is parsed as a presence flag without eating its successor.
+Backwards-compatible for all existing flags.
+
+**M8.2 diff**: 7 archetype demos byte-stable modulo nondeterminism
+(no source code touching them changed). Existing `audit-demo.sh` flow
+preserved (incomplete-config still emits 2 missing-archetype findings,
+exits 1). `recommend-drift-probe.mjs` invariant preserved (0 drift across
+6 workloads × 2 probed archetypes).
+
+**Reprobe**: 22/22 npm + 1/1 CLI clean, no upstream-surface contract
+movement. The polish batch is purely SDK-layer and doesn't probe upstream.
+
+**v1.0 narrative**: unchanged from M16 — 6 archetypes + 3 CLI subcommands +
+7 paste-ready upstream issues. v0.2 closes the doc + flag rough edges
+without expanding the SDK surface; the npm-publication blocker remains the
+last gate to a real `npm install @ruvector/sdk` first-run experience.
+
+**Next**: M17 scoping — PRD §5.1's 3-backend transport story (only `native`
+ships today; `wasm` and `http` remain). Same M11→M15 scoping pattern: run
+reprobe first, live-probe `@ruvector/ruvllm-wasm` and any HTTP-server
+artifacts upstream, produce `docs/plans/m17-scope.md` with 3-5 ratifiable
+open questions before any M17.x ship-task.
+
 ## Update — M16 outcome (README + getting-started ships; PRD §10 success metric testable)
 
 `packages/sdk/README.md` shipped — 328-line top-of-funnel doc covering the 7 required sections per the M16 ship-task spec: SDK premise + 6-archetype value, install + Node requirements, 30-second KB+LocalLLM autoEmbed example, 3 CLI subcommand walkthroughs, Known gaps table linking all 7 upstream issues, self-describing-roadmap callout with code snippet + `reprobe.mjs` invocation, link to milestone history.

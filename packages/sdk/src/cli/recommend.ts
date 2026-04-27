@@ -15,7 +15,7 @@
 
 import { createInterface } from 'node:readline/promises';
 import { writeFileSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { dirname, join as joinPath, relative as relPath, resolve as resolvePath } from 'node:path';
 import { WORKLOADS, findWorkload, type Archetype, type WorkloadKey, type WorkloadRecommendation } from './workloads.js';
 
 export type DataSizeBucket = '<1k' | '1k-100k' | '100k-1M' | '1M+';
@@ -39,6 +39,13 @@ export interface RecommendOptions {
   readonly out?: NodeJS.WritableStream;
   /** Stream for reading interactive answers. Default: process.stdin. */
   readonly input?: NodeJS.ReadableStream;
+  /**
+   * v0.2: in-repo / pre-publish development. When set, the generated config
+   * imports from this path (resolved relative to the output file's directory)
+   * instead of the published `'@ruvector/sdk'` specifier. Pass a directory
+   * containing the SDK package — the codegen appends `/dist/index.js`.
+   */
+  readonly localSdkPath?: string;
 }
 
 // ---------------- Public entry points ----------------
@@ -75,10 +82,27 @@ export async function runRecommend(options: RecommendOptions = {}): Promise<{ ou
   }
 
   const outPath = resolvePath(process.cwd(), options.outPath ?? './ruvector.config.ts');
-  const code = renderConfig(rec, answers);
+  const importSpecifier = computeImportSpecifier(options.localSdkPath, outPath);
+  const code = renderConfig(rec, answers, importSpecifier);
   writeFileSync(outPath, code, 'utf8');
   write(`→ Generated: ${outPath}`);
+  if (options.localSdkPath) write(`    using local SDK: import from '${importSpecifier}'`);
   return { outPath, recommendation: rec, answers };
+}
+
+/**
+ * Compute the import specifier the generated config should use. Returns
+ * `'@ruvector/sdk'` for published-package consumers; for in-repo development,
+ * resolves the local SDK path to the output file's location and points at
+ * `dist/index.js`. ESM specifiers need a leading `./` when relative.
+ */
+function computeImportSpecifier(localSdkPath: string | undefined, outPath: string): string {
+  if (!localSdkPath) return '@ruvector/sdk';
+  const absSdkEntry = joinPath(resolvePath(process.cwd(), localSdkPath), 'dist', 'index.js');
+  const rel = relPath(dirname(outPath), absSdkEntry);
+  // Normalize backslashes on Windows; ESM needs forward slashes.
+  const normalized = rel.split(/[\\/]/).join('/');
+  return normalized.startsWith('.') ? normalized : './' + normalized;
 }
 
 // ---------------- Interactive flow ----------------
@@ -162,11 +186,11 @@ const VAR_NAMES: Record<Archetype, string> = {
   AgentFramework: 'agentFramework',
 };
 
-export function renderConfig(rec: WorkloadRecommendation, answers: RecommendAnswers): string {
+export function renderConfig(rec: WorkloadRecommendation, answers: RecommendAnswers, importSpecifier: string = '@ruvector/sdk'): string {
   const dimsExpr = rec.archetypes.includes('LocalLLM') ? 'llm.embedDimensions' : '768';
 
   const importNames = rec.archetypes;
-  const importLine = `import {\n  ${importNames.join(',\n  ')},\n} from '@ruvector/sdk';\n`;
+  const importLine = `import {\n  ${importNames.join(',\n  ')},\n} from '${importSpecifier}';\n`;
 
   const constructions = rec.archetypes.map((name) => buildArchetypeConstruction(name, rec, dimsExpr)).join('\n');
   const returnObject = rec.archetypes

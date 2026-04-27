@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // @ruvector/sdk CLI dispatcher.
 //
-// M15.1 Phase-1A — only `doctor` is wired. `recommend` and `audit` come
-// in M15.2+ per m15-scope.md's phased plan.
+// Three subcommands wired: `doctor` (M15.1), `recommend` (M15.2),
+// `audit` (M15.3). v0.2 adds the `recommend --local-sdk-path` and the
+// `audit --workload` / `audit --strict` flags.
 //
 // Run via either `npx @ruvector/sdk <command>` or
 // `node node_modules/.bin/sdk <command>`. The bin field in package.json
@@ -22,13 +23,23 @@ Usage:
   sdk --help                   Show this message
 
 recommend flags (omit any to run interactively):
-  --workload   <key>           rag-over-docs | agent-memory | graph-reasoning |
+  --workload        <key>      rag-over-docs | agent-memory | graph-reasoning |
                                time-series-anomaly | local-llm-inference | agent-orchestration
-  --data-size  <bucket>        <1k | 1k-100k | 100k-1M | 1M+
-  --latency    <bucket>        <10ms | <50ms | <200ms | >200ms
-  --updates    <pattern>       mostly-read | daily-batch | streaming | bursty
-  --generate   <yes|no>        whether to wire LocalLLM Phase 2A
-  --out        <path>          output path (default: ./ruvector.config.ts)
+  --data-size       <bucket>   <1k | 1k-100k | 100k-1M | 1M+
+  --latency         <bucket>   <10ms | <50ms | <200ms | >200ms
+  --updates         <pattern>  mostly-read | daily-batch | streaming | bursty
+  --generate        <yes|no>   whether to wire LocalLLM Phase 2A
+  --out             <path>     output path (default: ./ruvector.config.ts)
+  --local-sdk-path  <path>     for in-repo / pre-publish dev: generated config
+                               imports from <path>/dist/index.js (resolved
+                               relative to the output file) instead of
+                               '@ruvector/sdk'
+
+audit flags:
+  --workload        <key>      inject _meta.workload anchor for hand-written
+                               configs (overrides any declared _meta.workload)
+  --strict                     elevate sdk-integration-suggestion rows to
+                               blocking — CI gate fails on any advisory finding
 
 Examples:
   sdk doctor ./ruvector.config.ts
@@ -36,14 +47,24 @@ Examples:
   sdk recommend --workload rag-over-docs --data-size 1k-100k \\
                 --latency '<50ms' --updates daily-batch --generate no \\
                 --out ./ruvector.config.ts             # non-interactive
+  sdk audit ./ruvector.config.ts --workload rag-over-docs --strict
 `;
+
+// Boolean flags take no value; everything else consumes the next token.
+const BOOLEAN_FLAGS = new Set(['strict']);
 
 function parseFlags(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a.startsWith('--') && i + 1 < args.length) {
-      flags[a.slice(2)] = args[i + 1];
+    if (!a.startsWith('--')) continue;
+    const name = a.slice(2);
+    if (BOOLEAN_FLAGS.has(name)) {
+      flags[name] = true;
+      continue;
+    }
+    if (i + 1 < args.length) {
+      flags[name] = args[i + 1];
       i++;
     }
   }
@@ -90,6 +111,7 @@ if (command === 'recommend') {
   if (flags.generate !== undefined) fromFlags.generate = flags.generate === 'yes' || flags.generate === 'true';
   const opts = { fromFlags };
   if (flags.out) opts.outPath = flags.out;
+  if (flags['local-sdk-path']) opts.localSdkPath = flags['local-sdk-path'];
   try {
     await runRecommend(opts);
     process.exit(0);
@@ -102,15 +124,24 @@ if (command === 'recommend') {
 if (command === 'audit') {
   const configPath = args[1];
   if (!configPath) {
-    process.stderr.write('sdk audit: missing <config-path>.\nUsage: sdk audit <config-path>\n');
+    process.stderr.write('sdk audit: missing <config-path>.\nUsage: sdk audit <config-path> [--workload <key>] [--strict]\n');
     process.exit(2);
   }
+  const auditFlags = parseFlags(args.slice(2));
+  const auditOpts = { configPath };
+  if (auditFlags.workload) auditOpts.workloadOverride = auditFlags.workload;
+  const strict = auditFlags.strict === true;
   try {
-    const report = await runAudit({ configPath });
-    // Exit 0 if clean; 1 if any drift was reported (excluding pure
-    // sdk-integration-suggestions, which are advisory). CI can gate on
-    // strict-drift via this exit code.
-    const blockingDrifts = report.drifts.filter((d) => d.kind !== 'sdk-integration-suggestion');
+    const report = await runAudit(auditOpts);
+    // Exit 0 if clean; 1 if any drift was reported. By default,
+    // sdk-integration-suggestion rows are advisory; --strict treats them
+    // as blocking too.
+    const blockingDrifts = strict
+      ? report.drifts
+      : report.drifts.filter((d) => d.kind !== 'sdk-integration-suggestion');
+    if (strict && blockingDrifts.length > 0) {
+      process.stdout.write(`(strict mode: sdk-integration-suggestion rows count as blocking)\n`);
+    }
     process.exit(blockingDrifts.length > 0 ? 1 : 0);
   } catch (e) {
     if (e && typeof e === 'object' && 'code' in e) {
