@@ -194,6 +194,100 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M24 outcome (PRD §11.6 ratifies upstream-tracking surface; §10 gains testable metric #6)
+
+The discipline M22+M23 built (38 monitored upstream signals via 3 probe
+categories) is now codified in PRD §11.6. The M17 ratification policy
+(§11.1–§11.5) added the "what we do" rules; M24 adds the "what we
+actually monitor" surface map.
+
+**Implementation** (~70 LOC of doc edits, no code changes):
+
+- New PRD §11.6 "Upstream-tracking surface (formalized M24)":
+  - Probe categories table (3 rows: NPM publication 31, CLI surface
+    contracts 1, binding-method behavior 6)
+  - Result types table (4 rows: ✓ expected, ⚠ drift, · skipped,
+    ! error) with their effects on overall exit code
+  - Coverage map (11 paste-ready issues → tracking mechanism); 6
+    binding-method probes, 3 publication-status, 2 unprobed (with
+    per-row rationale)
+  - Cadence (Required: every milestone close; Recommended: consumer
+    daily/weekly CI; Update protocol on drift)
+  - Adding a new probe (per-category steps, ~30-50 LOC each)
+
+- PRD §10 success metrics gain metric #6: "Reprobe matches expected on
+  every published SDK release." The first directly-measurable metric
+  in §10 — `node tools/reprobe-bindings/reprobe.mjs; echo $?` is the
+  literal pass/fail signal. Existing 5 metrics preserved verbatim.
+
+- PRD §11.1 hard rules: stale "8 paste-ready issues (#01–#08) as of
+  M17" updated to "11 (#01–#11) as of M24."
+
+- PRD §11.2 versioning: reprobe-snapshot reference now mentions
+  "PROBES + CLI_PROBES + BINDING_METHOD_PROBES (v0.5+)" and points at
+  §11.6 for the full monitored surface.
+
+- PRD §11.4 consumer-visibility: new paragraph documenting that
+  consumers can run reprobe themselves on their own CI cadence,
+  independently of SDK milestone close. Output is paste-ready into a
+  GitHub issue or scoping doc when drift fires.
+
+- CLAUDE.md reprobe reference: corrected count (was "31 npm + 1 CLI +
+  6 binding-method"; brief said 32, actual is 31 — fixed) and added
+  cross-link to PRD §11.6 for the formal coverage doc.
+
+**Caught live**: the task brief stated "32 npm" but reprobe actually
+reports 31. Cross-checked with `node tools/reprobe-bindings/reprobe.mjs`
+and grepped the PRD for stale `32 npm`/`32/32` references; found and
+corrected three. Per CLAUDE.md "trust observed > declared" — exactly
+the right discipline. The PRD now matches what reprobe actually does,
+not what the task brief claimed.
+
+**Verification**: PRD §11 subsections renumber clean (§11.1 → §11.6 in
+order, no gaps); reprobe runs clean (31/31 npm + 1/1 CLI + 6/6 binding-
+method, exit 0) and matches §11.6's claimed counts exactly; CLAUDE.md
+cross-link to PRD §11.6 resolves correctly. No code paths touched.
+
+**Project state after M24**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11), with **6 of 11 directly
+  probed at runtime via reprobe v0.5**
+- `reprobe.mjs` v0.5: 31 npm + 1 CLI + 6 binding-method probes; the
+  full surface formally documented in PRD §11.6
+- §10 success metric #6 is now testable — the first PRD success
+  metric that doesn't require telemetry, a survey, or an installed-
+  apps fleet
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+
+**The "operating principles ratified in PRD vs documented only in
+commit messages" cycle**: M17 codified §11.1–§11.5 hard rules + 
+versioning + response patterns. M20 codified the multi-archetype DI
+invariants in CLAUDE.md. M24 codifies the upstream-tracking *surface*
+in PRD §11.6 — the third of the three "what governs the SDK ↔ upstream
+relationship" artifacts. Future-session readers can find policy in
+PRD §11, operational rules in CLAUDE.md, and current monitoring counts
+by running reprobe.
+
+**Next ship-task candidates**:
+- **AgentMemory text persistence to backend** — M21 stores text
+  in-process only; v0.5 could persist via the backend's metadata
+  channel for cross-restart durability.
+- **An Issue #04 or #05 probe attempt** — the 2 unprobed issues from
+  M23's coverage map. Both are correctness/setup defects; harder
+  than M22/M23's pattern but worth trying.
+- **Cross-archetype-DI scoping doc** — additional DI patterns now
+  that v0.3 invariants are ratified.
+- **CHANGELOG.md** — the SDK doesn't have one yet. Per PRD §11.2
+  "the SDK CHANGELOG is the canonical record of which upstream
+  version delta drove each SDK major" — would be useful to start
+  one before any major release ships. ~half session.
+
+`docs/upstream-issues/README.md` references unchanged (M24 surfaced no
+new upstream issues — formalizes monitoring of the existing 11).
+
 ## Update — M23 outcome (reprobe v0.5: +Issues #03 + #06 binding-method probes; 'skipped' status added)
 
 Brings reprobe's binding-method probe coverage from 4 to **6 of 11**

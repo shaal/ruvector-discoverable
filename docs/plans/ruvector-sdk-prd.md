@@ -522,6 +522,7 @@ The SDK is successful when:
 3. **Generic-fallback rate.** <10% of installed apps run only the `LowLevel` API with no archetype.
 4. **Catalog completeness.** Catalog covers ≥95% of upstream `pub` items by L3 count, with `hidden`-tagged items reviewed within one release cycle of being introduced.
 5. **Doc-without-reading.** Developers report (via survey or issue tracker) discovering at least one capability they didn't know existed via `.explain()` output.
+6. **Reprobe matches expected on every published SDK release.** The `tools/reprobe-bindings/reprobe.mjs` script (v0.5: 31 npm + 1 CLI + 6 binding-method probes = 38 monitored signals) exits 0 against the upstream surface at SDK publish-time. Drift on a release tag = a reproducer for "what changed upstream between SDK versions" — the canonical input to the next SDK milestone. *(Added M24 ratification; testable directly via `node tools/reprobe-bindings/reprobe.mjs; echo $?`.)*
 
 ---
 
@@ -531,7 +532,7 @@ The SDK is a **consumer** of upstream `github.com/ruvnet/ruvector`. We do not co
 
 ### 11.1 Hard rules (govern every milestone)
 
-1. **Never block SDK delivery on an upstream fix.** When the SDK encounters an upstream defect, it (a) classifies the affected capability `dormant` with a blocker reason, (b) files a paste-ready bug report at `docs/upstream-issues/`, (c) ships around it. As of M17 ratification, 8 paste-ready issues have been filed (#01–#08); none have blocked a milestone.
+1. **Never block SDK delivery on an upstream fix.** When the SDK encounters an upstream defect, it (a) classifies the affected capability `dormant` with a blocker reason, (b) files a paste-ready bug report at `docs/upstream-issues/`, (c) ships around it. As of M24 (2026-04-27), 11 paste-ready issues have been filed (#01–#11); none have blocked a milestone.
 
 2. **Re-probe before relying on prior-doc upstream claims.** `tools/reprobe-bindings/reprobe.mjs` is the authoritative ground truth. Run it at every milestone close. M11 / M12 / M17 each caught a stale upstream-state claim that earlier scoping had treated as fact.
 
@@ -549,7 +550,7 @@ The SDK uses semver, with explicit upstream-snapshot tracking because upstream c
 | **minor** (`0.x.0`) | Additive surface changes: new archetype, new CLI subcommand, new transport backend, dormant→active flips driven by upstream changes the SDK now exposes. Old code paths continue to work. |
 | **major** (`x.0.0`) | Breaking SDK surface change. Reserved for: upstream forced a non-translatable break the SDK can't shim; OR an SDK-side architectural rewrite. Both should be rare. |
 
-Every SDK release names a **verified upstream snapshot** — the `PROBES` table in `tools/reprobe-bindings/reprobe.mjs` at the release commit. Re-running reprobe against today's npm registry surfaces drift; that drift drives the next milestone.
+Every SDK release names a **verified upstream snapshot** — the `PROBES` + `CLI_PROBES` + `BINDING_METHOD_PROBES` tables in `tools/reprobe-bindings/reprobe.mjs` (v0.5+) at the release commit. Re-running reprobe against today's upstream surfaces drift; that drift drives the next milestone. The full surface monitored is documented in §11.6 below.
 
 ### 11.3 Response patterns by upstream-change type
 
@@ -566,11 +567,71 @@ The SDK's `getValueReport()` always names the **observed upstream-package versio
 
 The SDK never *silently* degrades. Every degradation surfaces in `value-report.dormant[]` with a reason and an `enable` string (where applicable). Consumers wanting a CI gate against degradation use `sdk audit --strict` — which exits 1 on any sdk-integration-suggestion row, including the ones triggered by upstream regressions.
 
+**Consumers can also run reprobe themselves**, independently of the SDK's per-archetype `healthCheck()`. `node tools/reprobe-bindings/reprobe.mjs` prints a Markdown table of all 38 monitored signals (per §11.6), exits 0 on no-drift, and 1 on any drift detected. Consumers wanting earlier-than-milestone-close drift detection can wire reprobe into their own CI — its output is paste-ready into a GitHub issue or scoping doc when drift fires.
+
 ### 11.5 What this policy explicitly does NOT do
 
 - It does not promise to *fix* upstream defects. The SDK's role is to make them visible and to ship around them.
 - It does not promise the SDK will track every upstream release the day it lands. Reprobe runs at milestone close; consumers wanting faster cadence run reprobe themselves.
 - It does not promise SDK API stability across upstream majors. An upstream major may force an SDK major. The CHANGELOG is the canonical record of which upstream version delta drove each SDK major.
+
+### 11.6 Upstream-tracking surface *(formalized M24, 2026-04-27)*
+
+Reprobe v0.5 monitors **38 distinct upstream signals** across 3 probe categories. Every SDK release pins these as the verified snapshot per §11.2; drift on a re-run surfaces as a paste-ready Markdown block ready for inclusion in `docs/plans/m6-scope.md` or a new scoping doc.
+
+#### Probe categories
+
+| Category | Count | What it monitors | How it detects drift |
+|---|--:|---|---|
+| **NPM publication status** | 31 | Whether each tracked `@ruvector/*` package is `published`, `unpublished`, or `published-broken` (declares a `main` but ships only `package.json + README` — Issue #02 / #08 class) | `npm view <pkg> --json`; for `published-broken`, checks `dist.fileCount <= 2` |
+| **CLI surface contracts** | 1 | Presence/absence of named flags + subcommands in `ruvllm --help` output (M11.3 v0.2) | regex match against captured help text |
+| **Binding-method behavior** | 6 | Runtime defects in upstream bindings — Issues #01 / #03 / #06 / #09 / #10 / #11 (M22 + M23) | Subprocess-isolated probe scripts spawned via `node child_process.spawn`; SIGKILL-on-timeout for hung NAPI calls per Issue #11 |
+
+#### Result types
+
+Each probe entry resolves to one of:
+
+| Glyph | Status | Meaning | Effect on exit code |
+|---|---|---|---|
+| `✓` | `expected` (or `expected-hang`) | Observed state matches the policy's expected state — bug still present, classification still correct, OR package still published as expected | Doesn't contribute to drift |
+| `⚠` | `drift` | Observed state differs from expected — likely either upstream fixed something the SDK has classified dormant, or upstream regressed something previously working | **Sets exit code to 1**; produces a per-probe paste-ready drift block |
+| `·` | `skipped` | Probe declined to run (e.g., binding-method probe needs a binding that's not on disk in this CI environment). Specifically signaled via probe exit code 64 | Doesn't contribute to drift OR to errors |
+| `!` | `error` | Probe could not complete (spawn error, unexpected timeout, network failure for `npm view`) | Doesn't contribute to drift but reported separately; reprobe exit code is 1 if any errors occurred and no drift was detected |
+
+#### Coverage map
+
+The 11 paste-ready upstream issues at `docs/upstream-issues/` map to reprobe coverage as follows:
+
+| # | Issue | Tracked via | Status |
+|---|---|---|---|
+| 01 | `@ruvector/graph-node` Cypher stub | binding-method probe | ✓ M22 |
+| 02 | broken umbrella packages (`ruvector`, `@ruvector/sona`) | npm publication-status (`published-broken` heuristic) | n/a — different defect class for these specific packages; the `published-broken` infrastructure ratified at M17 covers Issue #08's siblings (`@ruvector/server`, `@ruvector/cluster`) |
+| 03 | `@ruvector/core` VectorDb dimension singleton | binding-method probe | ✓ **M23** |
+| 04 | sona MicroLora warmup | not single-subprocess-probeable (correctness/setup issue requiring stateful interaction) | unprobed |
+| 05 | `@ruvector/ruvllm` no model-loading API | not single-subprocess-probeable (would require model-file fetch + correctness check) | unprobed |
+| 06 | ruvllm wrapper case-rename mismatch | binding-method probe | ✓ **M23** |
+| 07 | `@ruvector/rvagent-*` family unpublished | npm publication-status | ✓ M15.1 v0.3 |
+| 08 | `@ruvector/server` + `@ruvector/cluster` broken-publish | npm publication-status (`published-broken`) | ✓ M17 |
+| 09 | `@ruvector/graph-wasm` Cypher stub | binding-method probe | ✓ M22 |
+| 10 | `@ruvector/ruvllm-wasm` no inference surface | binding-method probe | ✓ M22 |
+| 11 | `@ruvector/router` delete deadlock | binding-method probe (SIGKILL-on-timeout) | ✓ M22 |
+
+**6 of 11** issues have direct binding-method probes. **3 of 11** are covered by publication-status. **2 of 11** (#04, #05) are correctness/setup defects that don't lend themselves to single-script subprocess probes — the SDK's per-archetype `healthCheck()` tier-3 probes detect them at SDK consumer-run time, but reprobe can't.
+
+#### Cadence
+
+- **Required**: re-run reprobe at the close of every SDK milestone. The journal entry in `m6-scope.md` includes a "reprobe: 31/31 npm + 1/1 CLI + 6/6 binding-method probes match expected" line whenever it does (or names the drifted entries when it doesn't).
+- **Recommended**: any consumer or CI integrating against `@ruvector/sdk` should run reprobe on a schedule (daily or weekly) AND on every SDK version bump. The script is dependency-free Node ESM and exits 0 / 1 cleanly — `npm test`-friendly.
+- **Update protocol**: when drift fires, the next milestone's commit either updates the affected probe's `expect`/`expectStatus` (if the new state is a confirmed upstream fix) or files an upstream-issue if the new state is a regression.
+
+#### Adding a new probe
+
+The framework supports adding new entries cheaply:
+- **NPM**: append to `PROBES` array with `{ pkg, expect, notes }`. Auto-runs.
+- **CLI surface**: append to `CLI_PROBES` array with `{ bin, paths, expectAbsent, expectPresent, notes }`.
+- **Binding-method**: drop a script at `tools/reprobe-bindings/probes/NN-name.mjs` (exit 0 = expected, 1 = drift, 64 = skipped); append to `BINDING_METHOD_PROBES` array with `{ name, issue, scriptPath, timeoutMs, timeoutIsExpected, notes }`. Subprocess isolation + SIGKILL-on-timeout handle hung NAPI calls automatically.
+
+Per the M22/M23 milestones, ~30-50 LOC per new probe is the typical cost. The framework absorbs new probes well — each one adds one upstream signal to CI's monitoring surface.
 
 ---
 
