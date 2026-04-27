@@ -104,7 +104,7 @@ console.log(`  ${vr.summary}`);
 console.log(`  active:`);
 for (const a of vr.active) console.log(`    ✓ ${a.name.padEnd(22)} ${a.invocations} invocations  [${a.source}]`);
 console.log(`  dormant:`);
-for (const d of vr.dormant) console.log(`    ⚠ ${d.name.padEnd(22)} — ${d.reason}`);
+for (const d of vr.dormant) console.log(`    ⚠ [${d.blocker.padEnd(17)}] ${d.name.padEnd(22)} — ${d.reason}`);
 
 console.log('\nClosing.');
 await g.close();

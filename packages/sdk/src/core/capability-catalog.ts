@@ -18,6 +18,7 @@ import type { HealthCheckResult } from './health.js';
 import type { Pipeline } from './pipeline.js';
 import type {
   ActiveCapability,
+  DormantBlocker,
   DormantCapability,
   ValueReport,
 } from './value-report.js';
@@ -37,6 +38,14 @@ export type CapabilityCatalogEntry = {
   readonly defaultDormantReason?: string;
   readonly defaultDormantLift?: string;
   readonly defaultDormantEnable?: string;
+  /**
+   * What unblocks this capability when no probe observation overrides. M9.1
+   * classification: `upstream-binding` waits for upstream NAPI publishing,
+   * `upstream-bug` for an upstream fix, `sdk-integration` for SDK work,
+   * `design-deferred` for an intentional v0.2+ scope decision.
+   * Defaults to `sdk-integration` if unset (the most actionable category).
+   */
+  readonly defaultDormantBlocker?: DormantBlocker;
   /** Maps an `invocationCounts` key to populate `ActiveCapability.invocations`. */
   readonly invocationKey?: string;
 };
@@ -81,12 +90,29 @@ export function reduceValueReport(inputs: ReducerInputs): ValueReport {
     const reason = observedDormant && probe
       ? `[observed via probe '${probe.name}', status=${probe.status}] ${probe.detail ?? '(no detail)'}`
       : (cap.defaultDormantReason ?? 'No reason recorded.');
+
+    // Derive blocker. Probe observation wins when present:
+    //   broken      → binding does the wrong thing (upstream-bug)
+    //   unsupported → binding doesn't expose the surface (upstream-binding)
+    //   error       → binding crashed (treat as upstream-bug)
+    // Otherwise use the entry's declared default; fall back to sdk-integration
+    // (the most actionable category — if untagged, it's likely SDK work).
+    let blocker: DormantBlocker;
+    if (probe?.status === 'broken' || probe?.status === 'error') {
+      blocker = 'upstream-bug';
+    } else if (probe?.status === 'unsupported') {
+      blocker = 'upstream-binding';
+    } else {
+      blocker = cap.defaultDormantBlocker ?? 'sdk-integration';
+    }
+
     dormant.push({
       name: cap.name,
       source: cap.source,
       reason,
       expectedLift: cap.defaultDormantLift ?? 'Lift not documented.',
       enable: cap.defaultDormantEnable ?? 'See archetype documentation.',
+      blocker,
       ...(cap.adrs && { adrs: cap.adrs }),
     });
   }
@@ -100,7 +126,24 @@ export function reduceValueReport(inputs: ReducerInputs): ValueReport {
   const sourceTag = healthSource === 'observed' ? 'observed'
     : healthSource === 'declared' ? 'declared (run healthCheck() for live data)'
       : `mixed (${probedCount}/${totalCaps} observed)`;
-  const summary = `${active.length} of ${totalCaps} unique capabilities active. ${dormant.length} dormant — ${sourceTag}.`;
+
+  // Break dormant down by blocker — surfaces which dormant entries are
+  // SDK-actionable vs upstream-blocked.
+  const blockerCounts: Record<DormantBlocker, number> = {
+    'upstream-binding': 0,
+    'upstream-bug': 0,
+    'sdk-integration': 0,
+    'design-deferred': 0,
+  };
+  for (const d of dormant) blockerCounts[d.blocker]++;
+  const blockerParts: string[] = [];
+  if (blockerCounts['upstream-binding']) blockerParts.push(`${blockerCounts['upstream-binding']} upstream-binding`);
+  if (blockerCounts['upstream-bug'])     blockerParts.push(`${blockerCounts['upstream-bug']} upstream-bug`);
+  if (blockerCounts['sdk-integration'])  blockerParts.push(`${blockerCounts['sdk-integration']} sdk-integration`);
+  if (blockerCounts['design-deferred'])  blockerParts.push(`${blockerCounts['design-deferred']} design-deferred`);
+  const blockerTag = blockerParts.length > 0 ? ` (${blockerParts.join(', ')})` : '';
+
+  const summary = `${active.length} of ${totalCaps} unique capabilities active. ${dormant.length} dormant${blockerTag} — ${sourceTag}.`;
 
   const result: ValueReport = {
     generatedAt: new Date().toISOString(),

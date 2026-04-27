@@ -41,6 +41,26 @@ export interface ActiveCapability {
   readonly adrs?: readonly string[];
 }
 
+/**
+ * Why a capability is dormant. Two-tier classification (M9.1):
+ *
+ * - `upstream-binding`: the upstream binding doesn't expose this surface at
+ *   all. Action: wait for upstream to publish the NAPI/WASM/HTTP method.
+ * - `upstream-bug`: the binding exposes the surface but observation shows it's
+ *   broken (e.g. M6's Cypher stub). Action: file upstream OR wait for fix.
+ * - `sdk-integration`: the SDK could wire this with currently-available
+ *   bindings but hasn't yet. Action: this is on the SDK roadmap, not blocked
+ *   on anyone else. (M9 v0.1 demonstrated `graphRag` flipping from this
+ *   category to active by SDK-side integration alone.)
+ * - `design-deferred`: intentionally out of scope for the current SDK
+ *   milestone — a deliberate "not yet" rather than a missing piece.
+ */
+export type DormantBlocker =
+  | 'upstream-binding'
+  | 'upstream-bug'
+  | 'sdk-integration'
+  | 'design-deferred';
+
 export interface DormantCapability {
   readonly name: string;
   readonly source: string;
@@ -52,6 +72,12 @@ export interface DormantCapability {
   readonly enable: string;
   /** ADR IDs that document this capability, where known. */
   readonly adrs?: readonly string[];
+  /**
+   * What category of work unblocks this capability. Derived from probe status
+   * when observed (broken→upstream-bug, unsupported→upstream-binding) or from
+   * the catalog entry's `defaultDormantBlocker` otherwise. See {@link DormantBlocker}.
+   */
+  readonly blocker: DormantBlocker;
 }
 
 export interface ValueReportProvider {

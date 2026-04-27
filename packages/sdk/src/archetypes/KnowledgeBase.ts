@@ -251,6 +251,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'ruvector-core',
     adrs: ['ADR-001'],
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: '@ruvector/core@2.2.0 NAPI surface exposes only basic VectorDb. ' +
       'Sparse + dense fusion + RRF live in upstream Rust but are not bound to NAPI in this version.',
     defaultDormantLift: '20-49% retrieval improvement over single-vector search on heterogeneous corpora.',
@@ -264,11 +265,13 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     invocationKey: 'graphRagFanout',
     // Default-status is dormant because graph-rag requires the user to supply
     // a GraphReasoner at create-time. When supplied, the tier-3 probe runs
-    // and flips the observed status to `ok` — Graph RAG becomes the first
-    // archetype-coordinated capability to move from dormant→active.
+    // and flips the observed status to `ok`. Blocker is `sdk-integration`
+    // because the SDK already does the work — the user just has to wire
+    // the optional dependency. M9 v0.1 demonstrated this dormant→active flip.
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'sdk-integration',
     defaultDormantReason: 'KnowledgeBase was constructed without a graphReasoner. ' +
-      'Pass one (with matching dimensions) at create-time and call retrieve(query, { graphRagHops: 1 }) to enable.',
+      'Pass one (with matching dimensions) at create-time and call retrieve(query, { graphRagHops: 2 }) to enable.',
     defaultDormantLift: '30-60% recall on multi-hop questions vs naive chunk retrieval (per upstream README).',
     defaultDormantEnable: "await KnowledgeBase.create({ ..., graphReasoner: await GraphReasoner.create({ dimensions }) })",
   },
@@ -276,6 +279,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     name: 'colbertRerank',
     source: 'ruvector-core',
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: 'ColBERT multi-vector late interaction is not exposed in @ruvector/core\'s NAPI surface.',
     defaultDormantLift: 'Per-token MaxSim scoring for fine-grained matching.',
     defaultDormantEnable: 'Wait for upstream NAPI publishing or use the http backend.',
@@ -284,6 +288,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     name: 'matryoshka',
     source: 'ruvector-core',
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: 'Matryoshka adaptive-dimension search is not exposed in this NAPI surface.',
     defaultDormantLift: 'Coarse-to-fine funnel reduces tail latency on large corpora.',
     defaultDormantEnable: 'Wait for upstream NAPI publishing.',
@@ -293,6 +298,10 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'sona',
     adrs: ['ADR-014', 'ADR-044'],
     defaultStatus: 'dormant',
+    // sdk-integration: @ruvector/sona@0.1.5 IS published on npm with a
+    // working darwin-arm64 binary (verified in M6 scoping). The SDK just
+    // hasn't wired it into KnowledgeBase yet.
+    defaultDormantBlocker: 'sdk-integration',
     defaultDormantReason: '@ruvector/sona is published on npm but not wired into KnowledgeBase v0.1. ' +
       'recordFeedback is a no-op until the integration lands.',
     defaultDormantLift: '10-25% lift on repeat queries via continual learning (LoRA + EWC++).',

@@ -115,7 +115,7 @@ console.log(`  ${after.summary}`);
 console.log(`  active:`);
 for (const a of after.active) console.log(`    ✓ ${a.name.padEnd(16)} ${a.invocations} invocations  [${a.source}]`);
 console.log(`  dormant (truncated):`);
-for (const d of after.dormant) console.log(`    ⚠ ${d.name.padEnd(20)} — ${d.reason.slice(0, 80)}${d.reason.length > 80 ? '…' : ''}`);
+for (const d of after.dormant) console.log(`    ⚠ [${d.blocker.padEnd(17)}] ${d.name.padEnd(22)} — ${d.reason.slice(0, 75)}${d.reason.length > 75 ? '…' : ''}`);
 
 console.log('\nClosing.');
 await ts.close();

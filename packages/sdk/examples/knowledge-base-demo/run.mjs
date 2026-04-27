@@ -115,7 +115,7 @@ console.log(`  ${after.summary}`);
 console.log(`  active:`);
 for (const a of after.active) console.log(`    ✓ ${a.name.padEnd(16)} ${a.invocations} invocations  [${a.source}]`);
 console.log(`  dormant:`);
-for (const d of after.dormant) console.log(`    ⚠ ${d.name.padEnd(16)} — ${d.reason.slice(0, 90)}${d.reason.length > 90 ? '…' : ''}`);
+for (const d of after.dormant) console.log(`    ⚠ [${d.blocker.padEnd(17)}] ${d.name.padEnd(16)} — ${d.reason.slice(0, 80)}${d.reason.length > 80 ? '…' : ''}`);
 
 console.log('\nClosing.');
 await kb.close();

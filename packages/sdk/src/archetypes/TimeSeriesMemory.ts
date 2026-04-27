@@ -151,6 +151,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'ruvector-attention',
     adrs: ['ADR-015'],
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: '@ruvector/attention-node is not published on npm. Mamba SSM lives in upstream Rust but is not bound to NAPI in any v0.1-reachable version.',
     defaultDormantLift: 'Linear-time sequential modelling for long histories; better than vector-only similarity for recurring patterns.',
     defaultDormantEnable: 'Track @ruvector/attention-node publishing, or build the binding from source.',
@@ -160,6 +161,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'ruvector-temporal-tensor',
     adrs: ['ADR-017'],
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: 'No published NAPI binding for ruvector-temporal-tensor. Bucketed compression must happen client-side until v0.2.',
     defaultDormantLift: '2-32x memory reduction with adaptive tier compression on long histories.',
     defaultDormantEnable: 'Track upstream publishing.',
@@ -169,6 +171,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'ruvector-delta-core',
     adrs: ['ADR-016'],
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: 'No published NAPI binding for the ruvector-delta-* family. Window queries in v0.1 use post-search filtering — narrow windows degrade recall.',
     defaultDormantLift: 'Native windowed indexing eliminates the post-filter recall loss.',
     defaultDormantEnable: 'Track upstream delta-* NAPI publishing.',
@@ -178,6 +181,7 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     source: 'ruvector-graph-transformer',
     adrs: ['ADR-046'],
     defaultStatus: 'dormant',
+    defaultDormantBlocker: 'upstream-binding',
     defaultDormantReason: 'Causal-graph temporal layers live in ruvector-graph-transformer but are not exposed in @ruvector/graph-node@2.0.3.',
     defaultDormantLift: 'Granger causality extraction; ODE-integrated continuous-time recall.',
     defaultDormantEnable: 'Track upstream NAPI exposure.',
@@ -186,6 +190,10 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     name: 'changepointDetection',
     source: 'ruvector-attention',
     defaultStatus: 'dormant',
+    // sdk-integration: a trivial baseline (sliding-window L2 distance, CUSUM)
+    // could ship in pure SDK code without any upstream change. Deliberate
+    // v0.1 deferral; see m6-scope.md.
+    defaultDormantBlocker: 'sdk-integration',
     defaultDormantReason: 'detectChangepoints() throws in v0.1 — no streaming primitives in @ruvector/core; Mamba SSM (the natural backend) is not bound. v0.2 may add a trivial baseline.',
     defaultDormantLift: 'Real-time anomaly detection without a fitted model.',
     defaultDormantEnable: 'Wait for v0.2 baseline OR Mamba binding publication.',

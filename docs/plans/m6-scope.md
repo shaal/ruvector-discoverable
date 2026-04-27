@@ -194,6 +194,44 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M9.1 outcome (two-tier dormant classification)
+
+`DormantCapability` now carries a `blocker: DormantBlocker` field, classifying each dormant entry into one of four categories:
+
+- `upstream-binding` — the upstream binding doesn't expose this surface.
+- `upstream-bug` — the binding exposes the surface but observation shows it's broken.
+- `sdk-integration` — the SDK could wire this with currently-available bindings but hasn't yet.
+- `design-deferred` — intentionally out of scope for the current SDK milestone.
+
+Classification is automatic where possible: `reduceValueReport` derives the blocker from probe status (`broken`/`error` → `upstream-bug`, `unsupported` → `upstream-binding`). When no probe overrides, the catalog entry's `defaultDormantBlocker` is used; default-default is `sdk-integration` (the most actionable category).
+
+The summary string now breaks down dormant by blocker:
+```
+"5 of 9 unique capabilities active. 4 dormant (3 upstream-binding, 1 sdk-integration) — mixed (5/9 observed)."
+```
+
+Each demo's dormant list now shows the blocker prominently:
+```
+⚠ [upstream-bug     ] cypher                 — [observed via probe 'cypher', status=broken] ...
+⚠ [upstream-binding ] sublinearPageRank      — No published NAPI binding for ruvector-solver ...
+⚠ [sdk-integration  ] sona                   — @ruvector/sona is published on npm but not wired ...
+```
+
+**Project-wide breakdown** (across the three working archetypes):
+
+| Blocker | Count | Examples |
+|---|---:|---|
+| `upstream-binding` | 11 | sublinearPageRank, leidenCommunities, graphSparsifier, mincutGating, hybridSearch, colbertRerank, matryoshka, mambaAttention, temporalCompression, deltaIndexing, causalLayers |
+| `upstream-bug` | 1 | cypher (probe-observed) |
+| `sdk-integration` | 2 | sona, changepointDetection |
+| `design-deferred` | 0 | (reserved for explicit out-of-scope archetypes — quantum, FPGA, etc.) |
+
+The 11/1/2 split is the SDK's roadmap one paragraph: 2 things we can ship from here without waiting on anyone, 11 things that wait on upstream NAPI publishing, 1 thing that needs an upstream bug fix.
+
+Probe-observation override works the same way it did for the dormant `reason`: the static catalog declares an expected blocker; the probe overrides when present. If upstream fixes Cypher in 2.0.4, the probe reports `ok`, the row moves to active, and the blocker tag becomes irrelevant — same M6.2 dynamism applied at a higher classification layer.
+
+v0.2 polish items: `byBlocker?: Record<DormantBlocker, number>` on `ValueReport` for programmatic access; per-transport blocker resolution when WASM/HTTP backends land; potential split of `upstream-binding` into "binding-missing" vs "method-not-exposed" if editorial value justifies.
+
 ## Update — M9 v0.1 outcome (Graph RAG via cross-archetype coordination — first dormant→active flip)
 
 **The first milestone where a capability moves from dormant to active without an upstream binding change.** `graphRag` had been dormant since KnowledgeBase v0.1 (M7) with the dormant reason "KnowledgeBase does not coordinate with @ruvector/graph-node yet." M9 wires that coordination and the capability flips automatically because tier-3 (M8.1) sees the probe pass and the value-report reducer (M8.2) reflects observation over declaration.
