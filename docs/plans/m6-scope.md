@@ -170,6 +170,30 @@ The SDK reflects this honestly:
 
 **Generalization for M7+ readiness gate.** Scoping treated "binding loads + exports method" as readiness. That was insufficient. Going forward, the readiness gate is "binding loads AND a known input produces a correct output." Each archetype's adapter needs a smoke check that proves its core operations actually work, not just that the methods exist.
 
+## Update — M6.1 outcome (smoke-check infrastructure)
+
+The readiness-gate generalization is now infrastructure, not just a recommendation:
+
+- `packages/sdk/src/core/health.ts` — `CheckStatus` (`ok` | `broken` | `unsupported` | `error`), `CheckResult`, `HealthCheckResult`, `runCheck`, `summarize` helpers, and `HealthCheckProvider` interface.
+- `packages/sdk/src/backends/native-graph.ts` — `NativeGraphBackend.smokeCheck()` runs 6 probes against an isolated `new GraphDatabase()` (no user data touched): insertNode, insertEdge, stats, kHopNeighbors, hyperedgeSearch, cypher.
+- `packages/sdk/src/archetypes/GraphReasoner.ts` — `healthCheck()` exposes the result with archetype + backend context.
+- `packages/sdk/examples/graph-reasoner-demo/run.mjs` — calls `healthCheck()` before any user-facing operation, surfacing the live state of the binding.
+
+Live result (commit at HEAD):
+```
+GraphReasoner/native: 5 ok, 1 broken (1.09ms)
+  ✓ insertNode      ok       1 node inserted, id round-tripped
+  ✓ insertEdge      ok
+  ✓ stats           ok       2 nodes, 1 edges
+  ✓ kHopNeighbors   ok       2 reachable from probe-a
+  ✓ hyperedgeSearch ok       2 hits, top score 2.51e-11
+  ✗ cypher          broken   MATCH (n) RETURN n returned 0 nodes despite stats showing 2.
+```
+
+Key property: the cypher diagnostic is **observed, not declared**. When upstream fixes the stub binding, the next `healthCheck()` run reports `ok` with no SDK code change. Hand-written dormant lists rot; observed checks don't.
+
+v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
+
 ## Findings worth surfacing regardless of M6 path
 
 These came out of the scoping pass and matter for the broader project:

@@ -27,6 +27,14 @@ function pseudoEmbed(seed) {
 console.log('Opening GraphReasoner (in-memory, dims=' + DIMS + ')...');
 const g = await GraphReasoner.create({ dimensions: DIMS, distanceMetric: 'Cosine' });
 
+console.log('\n[0] Health check (isolated probe — no user data touched):');
+const health = await g.healthCheck();
+console.log(`  ${health.summary}`);
+for (const c of health.checks) {
+  const icon = c.status === 'ok' ? '✓' : c.status === 'broken' ? '✗' : c.status === 'unsupported' ? '·' : '!';
+  console.log(`    ${icon} ${c.name.padEnd(18)} ${c.status.padEnd(12)} ${c.detail ?? ''}`);
+}
+
 console.log('Wiring a small social graph...');
 //
 //   alice ─OWNS→ doc:auth-spec ─COVERS→ topic:auth

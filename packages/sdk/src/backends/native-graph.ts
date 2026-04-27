@@ -30,6 +30,7 @@ import {
 
 import type { Edge, Hyperedge, HyperedgeSearchOptions, Node } from '../archetypes/GraphReasoner.js';
 import { RuVectorError } from '../core/index.js';
+import { runCheck, type CheckResult } from '../core/health.js';
 
 export interface NativeGraphBackendOptions {
   readonly dimensions: number;
@@ -126,6 +127,77 @@ export class NativeGraphBackend {
   async close(): Promise<void> {
     // Upstream binding has no explicit close. Drop our reference.
     // (The .node binary cleans up its own native state when GC'd.)
+  }
+
+  /**
+   * Smoke-check this backend's working surface.
+   *
+   * Runs against an **isolated probe instance** — not the user's data — so
+   * the smoke check is safe to invoke at any time and never mutates the
+   * archetype's graph. Each capability is exercised with a minimal known
+   * input and the result is classified by what we got back.
+   *
+   * Designed for the Cypher-stub case from M6 v0.1: we insert a known node,
+   * call `query('MATCH (n) RETURN n')`, and check if it returns it. If the
+   * query returns nothing despite stats showing the node exists, we mark
+   * cypher as `broken` with a diagnostic. Every future binding regression of
+   * this shape gets caught the same way.
+   */
+  static async smokeCheck(): Promise<readonly CheckResult[]> {
+    const probe = new GraphDatabase({ dimensions: 4, distanceMetric: JsDistanceMetric.Cosine });
+    const v = (n: number): Float32Array => new Float32Array([n, n + 0.1, n + 0.2, n + 0.3]);
+
+    const insertNode = await runCheck('insertNode', async () => {
+      const id = await probe.createNode({ id: 'probe-a', embedding: v(1), labels: ['Probe'] });
+      return id === 'probe-a'
+        ? { status: 'ok', detail: '1 node inserted, id round-tripped' }
+        : { status: 'broken', detail: `expected id 'probe-a', got '${id}'` };
+    });
+
+    const insertEdge = await runCheck('insertEdge', async () => {
+      await probe.createNode({ id: 'probe-b', embedding: v(2), labels: ['Probe'] });
+      await probe.createEdge({ from: 'probe-a', to: 'probe-b', description: 'PROBE_LINK', embedding: v(3) });
+      return { status: 'ok' };
+    });
+
+    const stats = await runCheck('stats', async () => {
+      const s = await probe.stats();
+      if (s.totalNodes === 2 && s.totalEdges === 1) return { status: 'ok', detail: `${s.totalNodes} nodes, ${s.totalEdges} edges` };
+      return { status: 'broken', detail: `expected 2/1, got ${s.totalNodes}/${s.totalEdges}` };
+    });
+
+    const kHop = await runCheck('kHopNeighbors', async () => {
+      const r = await probe.kHopNeighbors('probe-a', 1);
+      // Expectation: at least probe-a itself + probe-b (1 hop away) reachable.
+      const has = r.includes('probe-a') && r.includes('probe-b');
+      return has
+        ? { status: 'ok', detail: `${r.length} reachable from probe-a` }
+        : { status: 'broken', detail: `expected to reach probe-b, got ${JSON.stringify(r)}` };
+    });
+
+    const hyperedge = await runCheck('hyperedgeSearch', async () => {
+      await probe.createHyperedge({ nodes: ['probe-a', 'probe-b'], description: 'PROBE_HE', embedding: v(4) });
+      const hits = await probe.searchHyperedges({ embedding: v(4), k: 5 });
+      return hits.length >= 1
+        ? { status: 'ok', detail: `${hits.length} hits, top score ${hits[0]?.score.toExponential(2) ?? 'n/a'}` }
+        : { status: 'broken', detail: 'searchHyperedges returned 0 hits for an exact-match query' };
+    });
+
+    // The stub-detector. We insert exactly one node above; if MATCH (n) returns
+    // anything other than [some node], the binding's Cypher engine is broken.
+    const cypher = await runCheck('cypher', async () => {
+      const r = await probe.query('MATCH (n) RETURN n');
+      // The probe inserted 2 nodes earlier in this same run.
+      // A working Cypher engine returns >= 1 node here.
+      if (r.nodes.length >= 1) return { status: 'ok', detail: `${r.nodes.length} nodes returned` };
+      return {
+        status: 'broken',
+        detail: `MATCH (n) RETURN n returned 0 nodes despite stats showing ${(await probe.stats()).totalNodes}. ` +
+                'Cypher engine is a stub in this binding version.',
+      };
+    });
+
+    return [insertNode, insertEdge, stats, kHop, hyperedge, cypher];
   }
 }
 

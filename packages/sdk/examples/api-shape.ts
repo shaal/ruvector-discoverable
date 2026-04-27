@@ -109,6 +109,12 @@ async function exerciseGraphReasoner(): Promise<void> {
   const unsub = g.subscribe((_change: unknown) => {});
   unsub();
 
+  // Health check — runs against an isolated probe, doesn't touch the graph.
+  const health = await g.healthCheck();
+  void health.summary;
+  void health.statusCounts.ok;
+  void health.checks[0]?.status;
+
   await g.close();
 }
 

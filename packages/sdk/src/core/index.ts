@@ -1,6 +1,7 @@
 export * from './backend.js';
 export * from './explain.js';
 export * from './feedback.js';
+export * from './health.js';
 export * from './pipeline.js';
 export * from './value-report.js';
 

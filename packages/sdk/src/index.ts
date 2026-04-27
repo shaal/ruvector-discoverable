@@ -116,6 +116,11 @@ export type {
   FeedbackSignal,
   FeedbackProvider,
   QueryId,
+  // Health
+  CheckStatus,
+  CheckResult,
+  HealthCheckResult,
+  HealthCheckProvider,
   // Pipeline
   Pipeline,
   PipelineStage,

@@ -35,7 +35,8 @@ import type { BackendSpec } from '../core/backend.js';
 import type { ExplainTrace } from '../core/explain.js';
 import type { Pipeline } from '../core/pipeline.js';
 import type { ValueReport, ValueReportProvider } from '../core/value-report.js';
-import { NotImplementedError, RuVectorError } from '../core/index.js';
+import type { HealthCheckProvider, HealthCheckResult } from '../core/health.js';
+import { NotImplementedError, RuVectorError, summarize } from '../core/index.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
 
 // ---------------- Public types ----------------
@@ -137,7 +138,7 @@ export type GraphChangeListener = (change: unknown) => void;
 
 // ---------------- Implementation ----------------
 
-export class GraphReasoner implements ValueReportProvider {
+export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // Internal state. Public API hides the backend.
   private readonly _backend: NativeGraphBackend;
   private readonly _options: GraphReasonerOptions;
@@ -365,6 +366,20 @@ export class GraphReasoner implements ValueReportProvider {
         { name: 'mincutGating',     source: 'ruvector-mincut-gated-transformer', active: false },
       ],
     };
+  }
+
+  /**
+   * Run a smoke check against an isolated probe instance of the backend.
+   *
+   * Does NOT touch the user's graph. Each capability is exercised with a
+   * known input and the result classified as `ok` / `broken` / `unsupported`
+   * / `error`. Idempotent — run any time. The Cypher-stub from M6 v0.1
+   * surfaces as `broken` here automatically.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    this.assertOpen();
+    const checks = await NativeGraphBackend.smokeCheck();
+    return summarize('GraphReasoner', 'native', checks);
   }
 
   async close(): Promise<void> {
