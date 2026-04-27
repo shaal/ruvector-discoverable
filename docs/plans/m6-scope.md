@@ -194,6 +194,46 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M11.2 outcome (cross-archetype embed propagation)
+
+`LocalLLM.embed()` now propagates across `KnowledgeBase`, `TimeSeriesMemory`, and `GraphReasoner` via an optional `embedder: LocalLLM` constructor parameter. When wired, the archetypes derive missing embeddings from text:
+
+- **KB**: `Document.embedding` becomes optional; `retrieve()` accepts `string` or `Float32Array`.
+- **TSM**: `TimeSeriesPoint.value: string` finally works at runtime (the M5 type union is now load-bearing); `query(string, ...)` works the same way.
+- **GR**: `Node.embedding`, `Edge.embedding`, `Hyperedge.embedding` become optional; nodes get `text?: string` (falls back to `id`); edges/hyperedges embed their `description`.
+
+The pre-computed `Float32Array` fast path is preserved; passing a vector bypasses the embedder. Dimension validation at create-time catches mismatches early with `EMBEDDER_DIM_MISMATCH`.
+
+**Tier-3 probes per archetype** assert real semantic ranking, not just plumbing:
+
+- `KB._autoEmbedProbe` ingests "apple pie cinnamon dessert recipe" + "corporate income tax filing requirements", retrieves "fruit baked sweet", asserts apple-pie outranks tax-filing **among the probe's own ids**. Robust to Finding B shared-state pollution because the assertion is on relative rank, not absolute #1.
+- `TSM._autoEmbedProbe` appends three string-only points (two cooking, one tax), queries "fruit baked sweet", asserts the top window-filtered point is a cooking point.
+- `GR._autoEmbedProbe` addBatch with text-only nodes/edges, asserts kHop traversal succeeds. (No semantic ranking assertion because GR's kHop is structural; embedding values don't affect reachability — that lives in KB/TSM probes.)
+
+**Project-wide value-report breakdown** (5 demos × 5 archetypes; first row uses the standalone demos with no embedder wired):
+
+| Archetype | Active | Dormant | upstream-binding | upstream-bug | sdk-integration | design-deferred |
+|---|--:|--:|--:|--:|--:|--:|
+| GraphReasoner | 3 | 6 | 4 | 1 (cypher) | 1 (autoEmbed) | 0 |
+| KnowledgeBase | 6 | 4 | 3 | 0 | 1 (autoEmbed) | 0 |
+| TimeSeriesMemory | 5 | 5 | 4 | 0 | 1 (autoEmbed) | 0 |
+| LocalLLM | 3 | 7 | 3 | 0 | 0 | 4 |
+| **Total** | **17** | **22** | **14** | **1** | **3** | **4** |
+
+`sdk-integration` rises from 0 (M11.1) to 3 (M11.2) — three new "the SDK can ship this with currently-available bindings" entries appear, one per cross-archetype-eligible archetype. The `examples/auto-embed-demo/run.mjs` shows all three flipping to **active** when one shared `LocalLLM` is wired across them: first time three dormant capabilities flip simultaneously via a single user-side wire-up.
+
+**Subtle reducer fix in `core/capability-catalog.ts`**. The blocker-derivation logic previously forced `upstream-binding` whenever a probe returned `unsupported`. That was correct for binding-tier probes ("method not exposed in NAPI") but wrong for archetype-tier probes signaling "user didn't opt in" (M11.2 autoEmbed). Now: catalog `defaultDormantBlocker` wins for `unsupported`. Side effect (a positive one): existing `sona` and `graphRag` dormant entries when not configured are now correctly labeled `[sdk-integration]` instead of `[upstream-binding]` — they were misclassified since M9.1.
+
+**Backend type-tightening as a load-bearing invariant**. `native-graph.ts` now uses `ResolvedNode`/`ResolvedEdge`/`ResolvedHyperedge` types (`Omit<Node, 'embedding'> & { embedding: Float32Array }`) at the backend boundary. The archetype layer's `_resolveNodes`/`_resolveEdges`/`_resolveHyperedges` are the only callers; TypeScript catches any path that bypasses resolution. The resolved type stays internal to the backend module — public types preserve the optional-embedding ergonomics.
+
+**Edge cases verified**: 7 error paths fire with actionable codes — 3× `EMBEDDER_DIM_MISMATCH` (KB/TSM/GR), 2× `MISSING_EMBEDDING` (KB ingest / GR addNodes), 1× `EMBEDDER_NOT_CONFIGURED` (KB retrieve(string) without embedder), 1× `NOT_IMPLEMENTED_M5` (TSM string-without-embedder, preserving v0.1 behavior).
+
+**v0.2 work-items still open** for M11.x:
+- `LocalLLM.embed(string[])` dispatches per-string internally because of the M11.1 binding-rejection finding. If upstream fixes the array-input case, archetype `_resolve*` helpers should batch instead of looping.
+- Auto-derive helpers across the three archetypes (`_resolveDocEmbeddings` / `coerceValue` / `_resolveNodes`) are similar enough to extract — but each shape differs (Document vs TimeSeriesPoint vs Node/Edge/Hyperedge), and three archetypes is the same threshold M8.2 used for the reducer extraction. Defer until a fourth archetype lands or the shapes converge.
+- The auto-embed probe assertions are conservative (relative rank among probe ids). A stronger assertion could check absolute semantic gap (cosine difference > some delta) once tier-3 latency budgets allow.
+- `LocalLLM` Phase 2 (`generate` + model loading) remains the next-largest LocalLLM work; M11.2 lays the cross-archetype groundwork without forcing it.
+
 ## Update — M11.1 outcome (LocalLLM Phase 1: embed + similarity active)
 
 Fourth archetype shipped with a real backend. Wiring `@ruvector/ruvllm` via `NativeRuvllmBackend`. Phase 1 surfaces `embed` and `similarity` only; `generate`/`stream` throw `NotImplementedError` until Phase 2 wires a real model file.

@@ -93,15 +93,20 @@ export function reduceValueReport(inputs: ReducerInputs): ValueReport {
 
     // Derive blocker. Probe observation wins when present:
     //   broken      → binding does the wrong thing (upstream-bug)
-    //   unsupported → binding doesn't expose the surface (upstream-binding)
     //   error       → binding crashed (treat as upstream-bug)
+    //   unsupported → binding (or feature) isn't wired. The catalog's
+    //                 `defaultDormantBlocker` is more accurate than a generic
+    //                 'upstream-binding' for archetype-tier probes that signal
+    //                 "user didn't opt in" (M11.2 autoEmbed pattern). When no
+    //                 default is declared, `upstream-binding` remains the
+    //                 sensible fallback for binding-tier "method not exposed".
     // Otherwise use the entry's declared default; fall back to sdk-integration
     // (the most actionable category — if untagged, it's likely SDK work).
     let blocker: DormantBlocker;
     if (probe?.status === 'broken' || probe?.status === 'error') {
       blocker = 'upstream-bug';
     } else if (probe?.status === 'unsupported') {
-      blocker = 'upstream-binding';
+      blocker = cap.defaultDormantBlocker ?? 'upstream-binding';
     } else {
       blocker = cap.defaultDormantBlocker ?? 'sdk-integration';
     }

@@ -38,6 +38,7 @@ import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport
 import { NativeCoreBackend } from '../backends/native-core.js';
 import { NativeSonaBackend } from '../backends/native-sona.js';
 import { GraphReasoner } from './GraphReasoner.js';
+import type { LocalLLM } from './LocalLLM.js';
 
 // ---------------- Public types ----------------
 
@@ -90,6 +91,20 @@ export interface KnowledgeBaseOptions {
    * `bindingPath`.
    */
   readonly sona?: true | { readonly bindingPath?: string };
+
+  /**
+   * Optional `LocalLLM` instance used to derive embeddings from text.
+   *
+   * **M11.2:** when wired, `Document.embedding` becomes optional —
+   * documents missing an embedding have one derived via `embedder.embed(text)`.
+   * `retrieve()` also accepts a `string` query (embedded the same way).
+   * The fast-path with pre-computed `Float32Array` is preserved.
+   *
+   * The embedder's `embedDimensions` must match this KB's `dimensions`,
+   * or `create()` throws `EMBEDDER_DIM_MISMATCH`. The user owns the
+   * embedder's lifecycle: this KB does not call `embedder.close()`.
+   */
+  readonly embedder?: LocalLLM;
 }
 
 export interface Entity {
@@ -160,8 +175,12 @@ export interface KnowledgeBaseCapabilityConfig {
 export interface Document {
   readonly id: string;
   readonly text: string;
-  /** Pre-computed embedding. v0.2 will derive this from `text` via an embedder config. */
-  readonly embedding: Float32Array;
+  /**
+   * Pre-computed embedding. Optional when an `embedder` was wired at
+   * create-time — the SDK then derives it from `text`. Required (and
+   * validated dimension-match against the backend) when no embedder is wired.
+   */
+  readonly embedding?: Float32Array;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
@@ -311,6 +330,21 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantEnable: 'Wait for upstream NAPI publishing.',
   },
   {
+    name: 'autoEmbed',
+    source: '@ruvector/sdk',
+    probeName: 'autoEmbed',
+    invocationKey: 'autoEmbed',
+    // M11.2: SDK-side cross-archetype propagation of LocalLLM.embed(). Default
+    // dormant because it requires the user to wire a LocalLLM at create-time.
+    // When wired, the tier-3 probe runs and observation flips to active.
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'sdk-integration',
+    defaultDormantReason: 'KnowledgeBase was constructed without an embedder. Pass `embedder: <LocalLLM>` ' +
+      'at create-time (with matching dimensions) to ingest text-only documents and call retrieve(string).',
+    defaultDormantLift: 'Drops the "user supplies pre-computed embedding" caveat — single source of embeddings across the SDK.',
+    defaultDormantEnable: 'await KnowledgeBase.create({ dimensions: 768, embedder: await LocalLLM.create() })',
+  },
+  {
     name: 'sona',
     source: 'sona',
     adrs: ['ADR-014', 'ADR-044'],
@@ -337,6 +371,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
   private readonly _options: KnowledgeBaseOptions;
   private readonly _graph: GraphReasoner | null;
   private readonly _sona: NativeSonaBackend | null;
+  private readonly _embedder: LocalLLM | null;
   private readonly _entityExtractor: EntityExtractor;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
@@ -354,10 +389,19 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     this._options = options;
     this._graph = options.graphReasoner ?? null;
     this._sona = sona;
+    this._embedder = options.embedder ?? null;
     this._entityExtractor = options.entityExtractor ?? defaultEntityExtractor;
   }
 
   static async create(options: KnowledgeBaseOptions): Promise<KnowledgeBase> {
+    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
+      throw new RuVectorError(
+        'EMBEDDER_DIM_MISMATCH',
+        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match KnowledgeBase.dimensions=${options.dimensions}. ` +
+        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
+        'and supply pre-computed Float32Array on each Document.',
+      );
+    }
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -377,14 +421,20 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
 
   /**
    * Ingest documents.
-   * v0.1 requires pre-computed embeddings on each Document.
+   *
+   * **M11.2:** `Document.embedding` is optional when an `embedder` was wired
+   * at create-time — missing embeddings are derived from `Document.text`
+   * before insert. With no embedder, `embedding` remains required and a
+   * missing one throws `MISSING_EMBEDDING`.
+   *
    * If a graphReasoner was supplied at create-time, this also extracts entities
    * via the configured extractor and writes the doc-entity graph.
    */
   async ingest(documents: readonly Document[]): Promise<IngestReport> {
     this.assertOpen();
     const start = performance.now();
-    const entries = documents.map((d) => ({ id: d.id, vector: d.embedding }));
+    const resolved = await this._resolveDocEmbeddings(documents);
+    const entries = resolved.map((d) => ({ id: d.id, vector: d.embedding }));
     await this._backend.insertBatch(entries);
 
     // Optional: populate the doc-entity graph for Graph RAG.
@@ -394,7 +444,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
       const entitiesToAdd = new Map<string, Float32Array>();
       const docNodes: { id: string; embedding: Float32Array; labels?: readonly string[] }[] = [];
       const edges: { from: string; to: string; description: string; embedding: Float32Array }[] = [];
-      for (const doc of documents) {
+      for (const doc of resolved) {
         const docNodeId = `doc:${doc.id}`;
         docNodes.push({ id: docNodeId, embedding: doc.embedding, labels: ['Doc'] });
         const ents = this._entityExtractor(doc);
@@ -431,7 +481,7 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
    * node by `graphRagHops` and adds reachable docs as `graph-adjacent`
    * citations. Throws if `graphRagHops > 0` but no graphReasoner.
    */
-  async retrieve(queryEmbedding: Float32Array, options: RetrieveOptions = {}): Promise<RetrieveResult> {
+  async retrieve(query: Float32Array | string, options: RetrieveOptions = {}): Promise<RetrieveResult> {
     this.assertOpen();
     const start = performance.now();
     const k = options.k ?? 8;
@@ -442,6 +492,23 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
         'retrieve({ graphRagHops > 0 }) requires a graphReasoner at create-time. ' +
         'Pass `graphReasoner: await GraphReasoner.create({ dimensions })` to KnowledgeBase.create().',
       );
+    }
+
+    // M11.2: string query → embedder → Float32Array. Pre-computed Float32Array
+    // is the fast path and bypasses the embedder even if one is wired.
+    let queryEmbedding: Float32Array;
+    if (typeof query === 'string') {
+      if (this._embedder === null) {
+        throw new RuVectorError(
+          'EMBEDDER_NOT_CONFIGURED',
+          'retrieve(string) requires an embedder at create-time. Pass `embedder: <LocalLLM>` ' +
+          'or call retrieve(Float32Array) with a pre-computed query embedding.',
+        );
+      }
+      this.bump('autoEmbed');
+      queryEmbedding = await this._embedder.embed(query);
+    } else {
+      queryEmbedding = query;
     }
 
     // SONA: warp the query embedding via the current LoRA delta before search.
@@ -608,8 +675,125 @@ export class KnowledgeBase implements ValueReportProvider, FeedbackProvider, Hea
     // For consumers, we expose a single summary check named `sona` reflecting
     // the binding-tier probes. If any is broken, sona = broken.
     const sonaSummary = summarizeSonaProbes(sonaProbeChecks);
-    this._lastHealth = summarize('KnowledgeBase', 'native', [...bindingChecks, ...archetypeChecks, ...graphRagChecks, sonaSummary]);
+    // M11.2: auto-embed cross-archetype probe (when user supplied an embedder).
+    const autoEmbedChecks = this._embedder !== null
+      ? await this._autoEmbedProbe()
+      : [{
+          name: 'autoEmbed',
+          status: 'unsupported' as const,
+          detail: 'no embedder supplied at create-time',
+          durationMs: 0,
+          tier: 'archetype' as const,
+        }];
+    this._lastHealth = summarize('KnowledgeBase', 'native', [
+      ...bindingChecks,
+      ...archetypeChecks,
+      ...graphRagChecks,
+      sonaSummary,
+      ...autoEmbedChecks,
+    ]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe for M11.2 auto-embed wiring. Constructs a temp KB sharing
+   * the user's embedder, ingests two text-only docs (one about fruit
+   * desserts, one about tax filings), retrieves with a string query about
+   * baked sweets, and asserts the dessert doc ranks first.
+   *
+   * The polysemous string pair (cooking vs tax) gives a strong-signal gap —
+   * same logic as M11.1's `similarityMonotonic` probe. A binding that
+   * embedded text into garbage would fail this assertion deterministically.
+   */
+  private async _autoEmbedProbe(): Promise<readonly CheckResult[]> {
+    if (this._embedder === null) {
+      return [{ name: 'autoEmbed', status: 'unsupported' as const, detail: 'no embedder configured', durationMs: 0, tier: 'archetype' as const }];
+    }
+    const dims = this._options.dimensions;
+    const prefix = `__ruvsdk_probe_kb_autoEmbed_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const idA = `${prefix}-fruit`;
+    const idB = `${prefix}-tax`;
+
+    const result = await runCheck('autoEmbed', async () => {
+      const probeKb = await KnowledgeBase.create({
+        dimensions: dims,
+        distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        embedder: this._embedder!,
+      });
+      try {
+        await probeKb.ingest([
+          { id: idA, text: 'apple pie cinnamon dessert recipe' },
+          { id: idB, text: 'corporate income tax filing requirements' },
+        ]);
+        // Wide k so probe assertion is robust to Finding B shared-state
+        // pollution: the user's own docs may outrank the probe's docs in
+        // absolute terms; what matters is the relative order *among the
+        // probe's own ids*. Apple-pie must outrank tax-filing for query
+        // 'fruit baked sweet'; that's the semantic invariant.
+        const r = await probeKb.retrieve('fruit baked sweet', { k: 32 });
+        const aRank = r.citations.findIndex((c) => c.documentId === idA);
+        const bRank = r.citations.findIndex((c) => c.documentId === idB);
+        if (aRank === -1) {
+          return {
+            status: 'broken' as const,
+            detail: `apple-pie probe doc not in top-${r.citations.length}; auto-embed pipeline likely broken`,
+          };
+        }
+        if (bRank !== -1 && bRank < aRank) {
+          return {
+            status: 'broken' as const,
+            detail: `tax-filing probe doc (rank ${bRank}) outranked apple-pie probe doc (rank ${aRank}) for 'fruit baked sweet' — semantic embedding likely broken`,
+          };
+        }
+        return {
+          status: 'ok' as const,
+          detail: `text→embed→retrieve: apple-pie outranks tax-filing for 'fruit baked sweet' (apple-pie@${aRank}${bRank !== -1 ? `, tax@${bRank}` : ', tax not in top-32'})`,
+        };
+      } finally {
+        // Best-effort cleanup of probe ids on the shared backend (Finding B).
+        for (const id of [idA, idB]) {
+          try { await this._backend.deleteId(id); } catch {/* ignore */}
+        }
+        await probeKb.close();
+      }
+    }, 'archetype');
+
+    return [result];
+  }
+
+  /**
+   * Resolve `Document.embedding` for every doc, deriving missing ones via the
+   * wired embedder. Throws `MISSING_EMBEDDING` if any doc has neither an
+   * embedding nor a wired embedder.
+   *
+   * Per-doc loop rather than batch because the published `RuvLLM.embed`
+   * binding rejects array inputs (M11.1 finding) — `LocalLLM.embed(string[])`
+   * dispatches per-string internally anyway.
+   */
+  private async _resolveDocEmbeddings(documents: readonly Document[]): Promise<readonly { id: string; text: string; embedding: Float32Array; metadata?: Readonly<Record<string, unknown>> }[]> {
+    const out: { id: string; text: string; embedding: Float32Array; metadata?: Readonly<Record<string, unknown>> }[] = [];
+    for (const d of documents) {
+      if (d.embedding) {
+        out.push(d.metadata !== undefined
+          ? { id: d.id, text: d.text, embedding: d.embedding, metadata: d.metadata }
+          : { id: d.id, text: d.text, embedding: d.embedding });
+        continue;
+      }
+      if (this._embedder === null) {
+        throw new RuVectorError(
+          'MISSING_EMBEDDING',
+          `Document '${d.id}' has no embedding and no embedder is wired. Either supply ` +
+          '`embedding: Float32Array` on each Document, or pass `embedder: <LocalLLM>` to KnowledgeBase.create().',
+        );
+      }
+      const vec = await this._embedder.embed(d.text);
+      this.bump('autoEmbed');
+      out.push(d.metadata !== undefined
+        ? { id: d.id, text: d.text, embedding: vec, metadata: d.metadata }
+        : { id: d.id, text: d.text, embedding: vec });
+    }
+    return out;
   }
 
   /**

@@ -39,6 +39,7 @@ import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../cor
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeGraphBackend } from '../backends/native-graph.js';
+import type { LocalLLM } from './LocalLLM.js';
 
 // ---------------- Public types ----------------
 
@@ -51,6 +52,19 @@ export interface GraphReasonerOptions {
   readonly storage?: string;
   readonly backend?: BackendSpec;
   readonly capabilities?: GraphReasonerCapabilityConfig;
+  /**
+   * Optional `LocalLLM` instance used to derive embeddings from text.
+   *
+   * **M11.2:** when wired, `embedding` becomes optional on `Node`, `Edge`,
+   * and `Hyperedge` — missing embeddings are derived from `Node.text ?? id`
+   * (Node) or `description` (Edge / Hyperedge). Pre-computed Float32Array
+   * is the fast path and bypasses derivation.
+   *
+   * The embedder's `embedDimensions` must match this graph's `dimensions`,
+   * or `create()` throws `EMBEDDER_DIM_MISMATCH`. The user owns the
+   * embedder's lifecycle.
+   */
+  readonly embedder?: LocalLLM;
 }
 
 export interface GraphReasonerCapabilityConfig {
@@ -68,7 +82,14 @@ export interface GraphReasonerCapabilityConfig {
 
 export interface Node {
   readonly id: string;
-  readonly embedding: Float32Array;
+  /**
+   * Pre-computed embedding. Optional when an `embedder` was wired at
+   * create-time — derived from `text ?? id` in that case. Required
+   * (and dimension-checked by the upstream binding) without an embedder.
+   */
+  readonly embedding?: Float32Array;
+  /** Optional text used to derive `embedding` when an embedder is wired. Falls back to `id`. */
+  readonly text?: string;
   readonly labels?: readonly string[];
   /** Property values must be strings (upstream constraint). */
   readonly properties?: Readonly<Record<string, string>>;
@@ -79,7 +100,11 @@ export interface Edge {
   readonly to: string;
   /** Edge label / description. Upstream calls this `description`; treats it as the edge type. */
   readonly description: string;
-  readonly embedding: Float32Array;
+  /**
+   * Pre-computed embedding. Optional when an `embedder` was wired at
+   * create-time — derived from `description` in that case.
+   */
+  readonly embedding?: Float32Array;
   /** Confidence in [0, 1]. */
   readonly confidence?: number;
   readonly metadata?: Readonly<Record<string, string>>;
@@ -88,7 +113,11 @@ export interface Edge {
 export interface Hyperedge {
   readonly nodes: readonly string[];
   readonly description: string;
-  readonly embedding: Float32Array;
+  /**
+   * Pre-computed embedding. Optional when an `embedder` was wired at
+   * create-time — derived from `description`.
+   */
+  readonly embedding?: Float32Array;
   readonly confidence?: number;
   readonly metadata?: Readonly<Record<string, string>>;
 }
@@ -218,6 +247,20 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantEnable: 'Track upstream publishing, or use the http backend.',
   },
   {
+    name: 'autoEmbed',
+    source: '@ruvector/sdk',
+    probeName: 'autoEmbed',
+    invocationKey: 'autoEmbed',
+    // M11.2: SDK-side cross-archetype embedding propagation. Default dormant
+    // because it requires the user to wire a LocalLLM at create-time.
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'sdk-integration',
+    defaultDormantReason: 'GraphReasoner was constructed without an embedder. Pass ' +
+      '`embedder: <LocalLLM>` (with matching dimensions) at create-time to addNodes/addEdges/addHyperedges with optional embedding.',
+    defaultDormantLift: 'Drops the "user supplies pre-computed embedding on every Node/Edge/Hyperedge" caveat.',
+    defaultDormantEnable: 'await GraphReasoner.create({ dimensions: 768, embedder: await LocalLLM.create() })',
+  },
+  {
     name: 'mincutGating',
     source: 'ruvector-mincut-gated-transformer',
     defaultStatus: 'dormant',
@@ -232,6 +275,7 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   // Internal state. Public API hides the backend.
   private readonly _backend: NativeGraphBackend;
   private readonly _options: GraphReasonerOptions;
+  private readonly _embedder: LocalLLM | null;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
@@ -239,10 +283,19 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   private constructor(backend: NativeGraphBackend, options: GraphReasonerOptions) {
     this._backend = backend;
     this._options = options;
+    this._embedder = options.embedder ?? null;
   }
 
   /** Open or create a graph. */
   static async create(options: GraphReasonerOptions): Promise<GraphReasoner> {
+    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
+      throw new RuVectorError(
+        'EMBEDDER_DIM_MISMATCH',
+        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match GraphReasoner.dimensions=${options.dimensions}. ` +
+        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
+        'and supply pre-computed Float32Array on each Node/Edge/Hyperedge.',
+      );
+    }
     const backend = await NativeGraphBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -255,7 +308,8 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   async addNodes(nodes: readonly Node[]): Promise<{ added: number }> {
     this.assertOpen();
     if (nodes.length === 0) return { added: 0 };
-    const result = await this._backend.batchInsert({ nodes, edges: [] });
+    const resolved = await this._resolveNodes(nodes);
+    const result = await this._backend.batchInsert({ nodes: resolved, edges: [] });
     this.bump('addNodes');
     return { added: result.nodeIds.length };
   }
@@ -264,7 +318,8 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   async addEdges(edges: readonly Edge[]): Promise<{ added: number }> {
     this.assertOpen();
     if (edges.length === 0) return { added: 0 };
-    const result = await this._backend.batchInsert({ nodes: [], edges });
+    const resolved = await this._resolveEdges(edges);
+    const result = await this._backend.batchInsert({ nodes: [], edges: resolved });
     this.bump('addEdges');
     return { added: result.edgeIds.length };
   }
@@ -272,9 +327,11 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   /** Bulk-add nodes AND edges in a single round-trip. */
   async addBatch(input: { nodes?: readonly Node[]; edges?: readonly Edge[] }): Promise<{ nodesAdded: number; edgesAdded: number }> {
     this.assertOpen();
+    const resolvedNodes = await this._resolveNodes(input.nodes ?? []);
+    const resolvedEdges = await this._resolveEdges(input.edges ?? []);
     const result = await this._backend.batchInsert({
-      nodes: input.nodes ?? [],
-      edges: input.edges ?? [],
+      nodes: resolvedNodes,
+      edges: resolvedEdges,
     });
     this.bump('addBatch');
     return { nodesAdded: result.nodeIds.length, edgesAdded: result.edgeIds.length };
@@ -283,13 +340,84 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
   /** Bulk-add hyperedges. (One per round-trip — no batch op in upstream binding.) */
   async addHyperedges(edges: readonly Hyperedge[]): Promise<{ added: number }> {
     this.assertOpen();
+    const resolved = await this._resolveHyperedges(edges);
     let added = 0;
-    for (const e of edges) {
+    for (const e of resolved) {
       await this._backend.createHyperedge(e);
       added++;
     }
     this.bump('addHyperedges');
     return { added };
+  }
+
+  /**
+   * Resolve missing embeddings on Nodes via the wired embedder, falling
+   * back to `text` then `id`. Throws `MISSING_EMBEDDING` if a node lacks an
+   * embedding and no embedder is wired.
+   */
+  private async _resolveNodes(nodes: readonly Node[]): Promise<readonly (Node & { embedding: Float32Array })[]> {
+    const out: (Node & { embedding: Float32Array })[] = [];
+    for (const n of nodes) {
+      if (n.embedding) {
+        out.push({ ...n, embedding: n.embedding });
+        continue;
+      }
+      if (this._embedder === null) {
+        throw new RuVectorError(
+          'MISSING_EMBEDDING',
+          `Node '${n.id}' has no embedding and no embedder is wired. Either supply ` +
+          '`embedding: Float32Array`, supply `text` plus an `embedder` at create-time, ' +
+          'or pass an embedder.',
+        );
+      }
+      const text = n.text ?? n.id;
+      const vec = await this._embedder.embed(text);
+      this.bump('autoEmbed');
+      out.push({ ...n, embedding: vec });
+    }
+    return out;
+  }
+
+  private async _resolveEdges(edges: readonly Edge[]): Promise<readonly (Edge & { embedding: Float32Array })[]> {
+    const out: (Edge & { embedding: Float32Array })[] = [];
+    for (const e of edges) {
+      if (e.embedding) {
+        out.push({ ...e, embedding: e.embedding });
+        continue;
+      }
+      if (this._embedder === null) {
+        throw new RuVectorError(
+          'MISSING_EMBEDDING',
+          `Edge '${e.from}->${e.to}' has no embedding and no embedder is wired. ` +
+          'Either supply `embedding: Float32Array` or pass an embedder at create-time.',
+        );
+      }
+      const vec = await this._embedder.embed(e.description);
+      this.bump('autoEmbed');
+      out.push({ ...e, embedding: vec });
+    }
+    return out;
+  }
+
+  private async _resolveHyperedges(edges: readonly Hyperedge[]): Promise<readonly (Hyperedge & { embedding: Float32Array })[]> {
+    const out: (Hyperedge & { embedding: Float32Array })[] = [];
+    for (const h of edges) {
+      if (h.embedding) {
+        out.push({ ...h, embedding: h.embedding });
+        continue;
+      }
+      if (this._embedder === null) {
+        throw new RuVectorError(
+          'MISSING_EMBEDDING',
+          `Hyperedge '${h.description}' has no embedding and no embedder is wired. ` +
+          'Either supply `embedding: Float32Array` or pass an embedder at create-time.',
+        );
+      }
+      const vec = await this._embedder.embed(h.description);
+      this.bump('autoEmbed');
+      out.push({ ...h, embedding: vec });
+    }
+    return out;
   }
 
   /**
@@ -420,8 +548,69 @@ export class GraphReasoner implements ValueReportProvider, HealthCheckProvider {
       dimensions: this._options.dimensions,
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
     });
-    this._lastHealth = summarize('GraphReasoner', 'native', [...bindingChecks, ...archetypeChecks]);
+    // M11.2: auto-embed probe (only runs when the user supplied an embedder).
+    const autoEmbedChecks = this._embedder !== null
+      ? await this._autoEmbedProbe()
+      : [{
+          name: 'autoEmbed',
+          status: 'unsupported' as const,
+          detail: 'no embedder supplied at create-time',
+          durationMs: 0,
+          tier: 'archetype' as const,
+        }];
+    this._lastHealth = summarize('GraphReasoner', 'native', [...bindingChecks, ...archetypeChecks, ...autoEmbedChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe for M11.2 — exercises addNodes (text-only) → kHop. Inserts
+   * two nodes connected by an edge using only `text`/`id` (no embedding),
+   * then asserts kHop traversal works. The probe doesn't assert semantic
+   * ranking because GR's kHop is structural; the embedding values don't
+   * affect reachability. The semantic assertion lives in KB / TSM probes.
+   */
+  private async _autoEmbedProbe(): Promise<readonly CheckResult[]> {
+    if (this._embedder === null) {
+      return [{ name: 'autoEmbed', status: 'unsupported' as const, detail: 'no embedder configured', durationMs: 0, tier: 'archetype' as const }];
+    }
+    const prefix = `__ruvsdk_probe_gr_autoEmbed_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const idA = `${prefix}-alice`;
+    const idB = `${prefix}-bob`;
+
+    const result = await runCheck('autoEmbed', async () => {
+      const probe = await GraphReasoner.create({
+        dimensions: this._options.dimensions,
+        distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        embedder: this._embedder!,
+      });
+      try {
+        // No `embedding` on any of these — derived via embedder.
+        await probe.addBatch({
+          nodes: [
+            { id: idA, text: 'researcher Alice working on graph algorithms', labels: ['Probe'] },
+            { id: idB, text: 'engineer Bob shipping graph databases', labels: ['Probe'] },
+          ],
+          edges: [
+            { from: idA, to: idB, description: 'COLLABORATES_WITH' },
+          ],
+        });
+        const reachable = await probe.kHopNeighbors({ startNode: idA, hops: 1 });
+        if (!reachable.includes(idB)) {
+          return {
+            status: 'broken' as const,
+            detail: `kHop(${idA.slice(-12)}, 1) did not reach ${idB.slice(-12)} after text-only addBatch: ${JSON.stringify(reachable)}`,
+          };
+        }
+        return {
+          status: 'ok' as const,
+          detail: `text-only addBatch+kHop: ${idA.slice(-12)} reached ${idB.slice(-12)} (${reachable.length} reachable)`,
+        };
+      } finally {
+        await probe.close().catch(() => {/* ignore */});
+      }
+    }, 'archetype');
+
+    return [result];
   }
 
   /**

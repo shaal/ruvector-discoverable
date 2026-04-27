@@ -32,6 +32,14 @@ import type { Edge, Hyperedge, HyperedgeSearchOptions, Node } from '../archetype
 import { RuVectorError } from '../core/index.js';
 import { runCheck, type CheckResult } from '../core/health.js';
 
+// Inputs the backend accepts have a *required* embedding. The public Node /
+// Edge / Hyperedge types make `embedding` optional (M11.2: derivable via a
+// wired LocalLLM). Resolution happens in the archetype layer; by the time
+// values reach the backend, embeddings must be present.
+type ResolvedNode = Omit<Node, 'embedding'> & { readonly embedding: Float32Array };
+type ResolvedEdge = Omit<Edge, 'embedding'> & { readonly embedding: Float32Array };
+type ResolvedHyperedge = Omit<Hyperedge, 'embedding'> & { readonly embedding: Float32Array };
+
 export interface NativeGraphBackendOptions {
   readonly dimensions: number;
   readonly distanceMetric: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
@@ -75,19 +83,19 @@ export class NativeGraphBackend {
 
   // ----- Inserts -----
 
-  async createNode(node: Node): Promise<string> {
+  async createNode(node: ResolvedNode): Promise<string> {
     return this._db.createNode(toJsNode(node));
   }
 
-  async createEdge(edge: Edge): Promise<string> {
+  async createEdge(edge: ResolvedEdge): Promise<string> {
     return this._db.createEdge(toJsEdge(edge));
   }
 
-  async createHyperedge(edge: Hyperedge): Promise<string> {
+  async createHyperedge(edge: ResolvedHyperedge): Promise<string> {
     return this._db.createHyperedge(toJsHyperedge(edge));
   }
 
-  async batchInsert(input: { nodes: readonly Node[]; edges: readonly Edge[] }): Promise<JsBatchResult> {
+  async batchInsert(input: { nodes: readonly ResolvedNode[]; edges: readonly ResolvedEdge[] }): Promise<JsBatchResult> {
     const batch: JsBatchInsert = {
       nodes: input.nodes.map(toJsNode),
       edges: input.edges.map(toJsEdge),
@@ -203,7 +211,7 @@ export class NativeGraphBackend {
 
 // ---------------- Translators ----------------
 
-function toJsNode(n: Node): JsNode {
+function toJsNode(n: ResolvedNode): JsNode {
   return {
     id: n.id,
     embedding: n.embedding,
@@ -212,7 +220,7 @@ function toJsNode(n: Node): JsNode {
   };
 }
 
-function toJsEdge(e: Edge): JsEdge {
+function toJsEdge(e: ResolvedEdge): JsEdge {
   return {
     from: e.from,
     to: e.to,
@@ -223,7 +231,7 @@ function toJsEdge(e: Edge): JsEdge {
   };
 }
 
-function toJsHyperedge(h: Hyperedge): JsHyperedge {
+function toJsHyperedge(h: ResolvedHyperedge): JsHyperedge {
   return {
     nodes: [...h.nodes],
     description: h.description,

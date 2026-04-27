@@ -37,6 +37,7 @@ import type { CheckResult, HealthCheckProvider, HealthCheckResult } from '../cor
 import type { CapabilityCatalogEntry } from '../core/capability-catalog.js';
 import { NotImplementedError, RuVectorError, reduceIntrospect, reduceValueReport, runCheck, summarize } from '../core/index.js';
 import { NativeCoreBackend } from '../backends/native-core.js';
+import type { LocalLLM } from './LocalLLM.js';
 
 // ---------------- Public types ----------------
 
@@ -66,6 +67,17 @@ export interface TimeSeriesMemoryOptions {
   /** Sliding-window size (left + right) for changepoint detection. Default 5. */
   readonly changepointWindow?: number;
   readonly capabilities?: TimeSeriesCapabilityConfig;
+  /**
+   * Optional `LocalLLM` instance used to derive embeddings from string
+   * `value`s on `TimeSeriesPoint`. **M11.2:** when wired, append/query
+   * accept text directly; otherwise the runtime continues to throw on
+   * string inputs (preserving v0.1 behaviour).
+   *
+   * The embedder's `embedDimensions` must match this stream's `dimensions`,
+   * or `create()` throws `EMBEDDER_DIM_MISMATCH`. The user owns the
+   * embedder's lifecycle; this archetype does not call `embedder.close()`.
+   */
+  readonly embedder?: LocalLLM;
 }
 
 export interface TimeSeriesCapabilityConfig {
@@ -196,6 +208,20 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantEnable: 'Track upstream NAPI exposure.',
   },
   {
+    name: 'autoEmbed',
+    source: '@ruvector/sdk',
+    probeName: 'autoEmbed',
+    invocationKey: 'autoEmbed',
+    // M11.2: embed string values via wired LocalLLM. Default dormant; flips
+    // active when the user passes `embedder` and the tier-3 probe passes.
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'sdk-integration',
+    defaultDormantReason: 'TimeSeriesMemory was constructed without an embedder. Pass ' +
+      '`embedder: <LocalLLM>` (with matching dimensions) at create-time to append/query string values directly.',
+    defaultDormantLift: 'Drops the "Float32Array only" runtime restriction on point values; aligns with KB and GR.',
+    defaultDormantEnable: 'await TimeSeriesMemory.create({ streamId, dimensions: 768, embedder: await LocalLLM.create() })',
+  },
+  {
     name: 'changepointDetection',
     source: '@ruvector/sdk',
     probeName: 'changepointDetection',
@@ -249,6 +275,7 @@ interface RingPoint {
 export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvider {
   private readonly _backend: NativeCoreBackend;
   private readonly _options: TimeSeriesMemoryOptions;
+  private readonly _embedder: LocalLLM | null;
   private _invocationCounts = new Map<string, number>();
   private _closed = false;
   private _lastHealth: HealthCheckResult | null = null;
@@ -263,6 +290,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   private constructor(backend: NativeCoreBackend, options: TimeSeriesMemoryOptions) {
     this._backend = backend;
     this._options = options;
+    this._embedder = options.embedder ?? null;
     this._maxRecent = Math.max(2, options.maxRecentForChangepoints ?? 1000);
     this._cpWindow = Math.max(1, options.changepointWindow ?? 5);
   }
@@ -276,6 +304,14 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   }
 
   static async create(options: TimeSeriesMemoryOptions): Promise<TimeSeriesMemory> {
+    if (options.embedder && options.embedder.embedDimensions !== options.dimensions) {
+      throw new RuVectorError(
+        'EMBEDDER_DIM_MISMATCH',
+        `embedder.embedDimensions=${options.embedder.embedDimensions} does not match TimeSeriesMemory.dimensions=${options.dimensions}. ` +
+        `Either set dimensions=${options.embedder.embedDimensions} (matches the embedder) or omit the embedder ` +
+        'and supply Float32Array (or number[]) values.',
+      );
+    }
     const backend = await NativeCoreBackend.create({
       dimensions: options.dimensions,
       distanceMetric: options.distanceMetric ?? 'Cosine',
@@ -287,7 +323,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
 
   async append(point: TimeSeriesPoint): Promise<void> {
     this.assertOpen();
-    const vector = this.coerceValue(point.value);
+    const vector = await this.coerceValue(point.value);
     const id = buildId(this._options.streamId, point.timestampMs, this._seq++);
     await this._backend.insert(id, vector);
     this.pushRecent({ timestampMs: point.timestampMs, value: vector });
@@ -297,10 +333,14 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   async appendBatch(points: readonly TimeSeriesPoint[]): Promise<{ written: number }> {
     this.assertOpen();
     if (points.length === 0) return { written: 0 };
-    const entries = points.map((p) => ({
-      id: buildId(this._options.streamId, p.timestampMs, this._seq++),
-      vector: this.coerceValue(p.value),
-    }));
+    // Sequential coerce: keeps `_seq` increment in input order and matches the
+    // M11.1 finding that the published binding rejects array embed inputs
+    // anyway, so per-string dispatch is the real underlying behaviour.
+    const entries: { id: string; vector: Float32Array }[] = [];
+    for (const p of points) {
+      const vector = await this.coerceValue(p.value);
+      entries.push({ id: buildId(this._options.streamId, p.timestampMs, this._seq++), vector });
+    }
     await this._backend.insertBatch(entries);
     // Mirror to the ring buffer for changepoint detection.
     for (let i = 0; i < points.length; i++) {
@@ -322,7 +362,7 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
   async query(value: TimeSeriesPoint['value'], options: TemporalQueryOptions = {}): Promise<TemporalResult> {
     this.assertOpen();
     const start = performance.now();
-    const vector = this.coerceValue(value);
+    const vector = await this.coerceValue(value);
     const k = options.k ?? 32;
     const hits = await this._backend.search(vector, k);
 
@@ -474,8 +514,72 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
       distanceMetric: this._options.distanceMetric ?? 'Cosine',
       ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
     });
-    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks, ...cpChecks]);
+    // M11.2: auto-embed probe (only runs when the user supplied an embedder).
+    const autoEmbedChecks = this._embedder !== null
+      ? await this._autoEmbedProbe()
+      : [{
+          name: 'autoEmbed',
+          status: 'unsupported' as const,
+          detail: 'no embedder supplied at create-time',
+          durationMs: 0,
+          tier: 'archetype' as const,
+        }];
+    this._lastHealth = summarize('TimeSeriesMemory', 'native', [...bindingChecks, ...archetypeChecks, ...cpChecks, ...autoEmbedChecks]);
     return this._lastHealth;
+  }
+
+  /**
+   * Tier-3 probe for M11.2. Constructs a temp stream sharing the user's
+   * embedder, appends three string-only points (two cooking, one tax-related),
+   * queries with a string about baked sweets, and asserts the cooking points
+   * outrank the tax point. Same polysemous-pair logic as M11.1.
+   */
+  private async _autoEmbedProbe(): Promise<readonly CheckResult[]> {
+    if (this._embedder === null) {
+      return [{ name: 'autoEmbed', status: 'unsupported' as const, detail: 'no embedder configured', durationMs: 0, tier: 'archetype' as const }];
+    }
+    const result = await runCheck('autoEmbed', async () => {
+      const probeStream = `__ruvsdk_probe_tsm_autoEmbed_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+      const probe = await TimeSeriesMemory.create({
+        streamId: probeStream,
+        dimensions: this._options.dimensions,
+        distanceMetric: this._options.distanceMetric ?? 'Cosine',
+        ...(this._options.bindingPath !== undefined && { bindingPath: this._options.bindingPath }),
+        embedder: this._embedder!,
+      });
+      try {
+        const T0 = Date.parse('2100-01-01T00:00:00Z'); // far-future, isolated from real data
+        const tCookA = T0;
+        const tTax = T0 + 60_000;
+        const tCookB = T0 + 120_000;
+        await probe.append({ timestampMs: tCookA, value: 'apple pie cinnamon dessert recipe' });
+        await probe.append({ timestampMs: tTax,   value: 'corporate income tax filing requirements' });
+        await probe.append({ timestampMs: tCookB, value: 'banana bread recipe sweet baked' });
+        const r = await probe.query('fruit baked sweet', {
+          window: { fromMs: T0 - 1, toMs: T0 + 200_000 },
+          k: 16,
+        });
+        if (r.points.length < 2) {
+          return { status: 'broken' as const, detail: `expected ≥2 in-window points; got ${r.points.length}` };
+        }
+        const top = r.points[0];
+        if (!top) return { status: 'broken' as const, detail: 'no top point' };
+        const cookingTimes = new Set([tCookA, tCookB]);
+        if (!cookingTimes.has(top.timestampMs)) {
+          return {
+            status: 'broken' as const,
+            detail: `top point ts=${top.timestampMs} matches the tax-filing point; expected a cooking point for query 'fruit baked sweet'`,
+          };
+        }
+        return {
+          status: 'ok' as const,
+          detail: `string→embed→query: top point ts=${top.timestampMs} is a cooking point (vs tax point at ts=${tTax})`,
+        };
+      } finally {
+        await probe.close();
+      }
+    }, 'archetype');
+    return [result];
   }
 
   /**
@@ -645,16 +749,28 @@ export class TimeSeriesMemory implements ValueReportProvider, HealthCheckProvide
     return [result];
   }
 
-  private coerceValue(value: TimeSeriesPoint['value']): Float32Array {
+  private async coerceValue(value: TimeSeriesPoint['value']): Promise<Float32Array> {
     if (value instanceof Float32Array) return value;
     if (Array.isArray(value)) {
       const f = new Float32Array(value.length);
       for (let i = 0; i < value.length; i++) f[i] = (value[i] as number) ?? 0;
       return f;
     }
+    // M11.2: string → embedder. Bumps autoEmbed invocation counter so the
+    // value-report's autoEmbed row reflects real usage.
+    if (typeof value === 'string') {
+      if (this._embedder === null) {
+        throw new NotImplementedError(
+          'TimeSeriesMemory.append/query value-coercion — string inputs require an embedder. ' +
+          'Pass `embedder: <LocalLLM>` (with matching dimensions) at create-time, or pass Float32Array / number[].'
+        );
+      }
+      this.bump('autoEmbed');
+      return this._embedder.embed(value);
+    }
     throw new NotImplementedError(
-      'TimeSeriesMemory.append/query value-coercion — v0.1 only accepts Float32Array (or number[]). ' +
-      'String and Record inputs require an embedder, which is deferred to v0.2.'
+      'TimeSeriesMemory.append/query value-coercion — v0.1 only accepts Float32Array, number[], or string ' +
+      '(when an embedder is wired). Record values are deferred to v0.2.'
     );
   }
 }
