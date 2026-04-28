@@ -271,6 +271,17 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     defaultDormantEnable: 'await AgentMemory.create({ ..., hyperbolic: true })',
   },
   {
+    name: 'textPersistence',
+    source: '@ruvector/sdk',
+    probeName: 'textPersistence',
+    invocationKey: 'remember',
+    defaultStatus: 'dormant',
+    defaultDormantBlocker: 'sdk-integration',
+    defaultDormantReason: 'AgentMemory was constructed without `storage`. Memory text from remember() lives in-process only and is lost on restart (M21 in-process map).',
+    defaultDormantLift: 'M27 — memory text + per-agent seq counter persist across process restart via SDK-side sidecar JSON, so recall() returns original text instead of placeholder after a restart.',
+    defaultDormantEnable: 'await AgentMemory.create({ ..., storage: \'/path/to/agent.db\' })',
+  },
+  {
     name: 'gnnLearning',
     source: 'ruvector-gnn',
     defaultStatus: 'dormant',
@@ -694,8 +705,28 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     const hyperCheck: CheckResult = this._hyperbolic
       ? await this._hyperbolicProbe()
       : { name: 'hyperbolic', status: 'unsupported', detail: 'hyperbolic: false at create-time', durationMs: 0, tier: 'archetype' };
+    // M28 — textPersistence is `ok` when storage was supplied at create-time
+    // (sidecar path was derived; M27 write-through is active), else
+    // `unsupported`. Synthetic check rather than round-trip — write+read
+    // correctness is exercised by M27's subprocess demo, not by every
+    // healthCheck() call.
+    const textPersistCheck: CheckResult = this._textStorePath !== null
+      ? {
+          name: 'textPersistence',
+          status: 'ok',
+          detail: `sidecar at ${this._textStorePath} (in-memory entries: ${this._textStore.size}, next seq: ${this._seq})`,
+          durationMs: 0,
+          tier: 'archetype',
+        }
+      : {
+          name: 'textPersistence',
+          status: 'unsupported',
+          detail: 'no `storage` option supplied at create-time',
+          durationMs: 0,
+          tier: 'archetype',
+        };
     this._lastHealth = summarize('AgentMemory', this._backend.kind, [
-      ...bindingChecks, ...archetypeChecks, sonaSummary, graphCheck, autoEmbedCheck, hyperCheck,
+      ...bindingChecks, ...archetypeChecks, sonaSummary, graphCheck, autoEmbedCheck, hyperCheck, textPersistCheck,
     ]);
     return this._lastHealth;
   }

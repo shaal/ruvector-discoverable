@@ -194,6 +194,143 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M28 outcome (AgentMemory `textPersistence` capability catalog row — surfaces M27 in getValueReport)
+
+M27 shipped durable text persistence via SDK sidecar but left the
+feature invisible to `AgentMemory.getValueReport()` and `introspect()`.
+Users running `sdk audit` / `sdk recommend` against an AgentMemory
+config wouldn't discover that they could opt into persistence by
+passing `storage`. M28 closes the discoverability loop with one
+catalog row + one health-check probe — pure integration into the
+existing reducer machinery, zero new framework code.
+
+**Implementation** (~30 LOC, one file):
+
+- `packages/sdk/src/archetypes/AgentMemory.ts`:
+  - New `CAPABILITY_CATALOG` row `textPersistence`: source
+    `@ruvector/sdk`, probeName `textPersistence`, invocationKey
+    `remember`, defaultStatus `dormant`, defaultDormantBlocker
+    `sdk-integration`, defaultDormantEnable
+    `await AgentMemory.create({ ..., storage: '/path/to/agent.db' })`.
+    Inserted in catalog ordering between `hyperbolic` (the prior
+    SDK-source row) and `gnnLearning` (the first upstream-binding row),
+    grouping all SDK-source rows together.
+  - New `textPersistCheck` in `healthCheck()`: returns `ok` when
+    `_textStorePath !== null` with detail naming the sidecar path,
+    in-memory entry count, and next-seq value; returns `unsupported`
+    with detail `"no \`storage\` option supplied at create-time"`
+    otherwise. Synthetic check — does NOT exercise write/read
+    round-trip (M27's subprocess demo already covers correctness).
+    Added to the summarize() check list alongside the other
+    archetype-tier probes.
+
+**Architecture call: zero machinery, not 'small machinery'.** Initial
+scoping called for "small machinery for runtime classification
+override," but reading `reduceValueReport` revealed the override
+hook already existed: any catalog row with `defaultStatus: 'dormant'`
+flips to active when its named probe returns `ok` in the cached
+healthCheck. M28 plugs into that contract directly. The same pattern
+is used by `autoEmbed` (active when embedder DI was supplied),
+`hyperbolic` (active when `hyperbolic: true`), `graphMemory` (active
+when graphReasoner DI was supplied) — sister-archetype consistency
+is automatic.
+
+**Drift-by-inversion verified live**: ran an inline node script that
+constructed AgentMemory twice — once without `storage`, once with —
+and asserted the row appears in the right list each time:
+
+```
+== Branch A: storage NOT set ==
+  active? false   dormant? true   blocker: sdk-integration
+  enable: await AgentMemory.create({ ..., storage: '/path/to/agent.db' })
+== Branch B: storage IS set ==
+  active? true   dormant? false   invocations: 1
+
+OK — textPersistence row flips active↔dormant correctly
+```
+
+Cross-checked the same against `introspect()`:
+- without storage: `{ name: 'textPersistence', active: false }`,
+  not in stages
+- with storage: `{ name: 'textPersistence', active: true }`,
+  appears in `pipeline.stages`
+
+The reducer's documented contract — "stages always equals the active
+capabilities" (M8.2 unification) — holds for the new row.
+
+**M8.2 byte-stable diff (deliberate, not regression)**:
+- `agent-memory-router-demo/run.mjs`: AgentMemory value-report line
+  `3 of 12` → `3 of 13`, `4 sdk-integration` → `5 sdk-integration`.
+  Storage is unset in this demo, so textPersistence is correctly
+  dormant.
+- `v03-publish-ready-demo/run.mjs`: AgentMemory value-report line
+  `5 of 12` → `5 of 13`, `2 sdk-integration` → `3 sdk-integration`.
+  Same reason.
+- These changes ARE the work product of M28 (a new capability row
+  appears in the count). Other archetypes' rows unchanged.
+
+**Caught (accepted v0.5 trade-off)**: synthetic probe doesn't run a
+write/read round-trip. If `storage` is set but the path is unwriteable
+(permissions, missing parent dir, full disk), healthCheck reports
+`ok` but the first `remember()` throws a structured fs error at write
+time. The user learns at remember-time, not healthCheck-time. A
+future tier-3 round-trip probe would catch it earlier — candidate
+for M29 if the false-positive UX becomes a real complaint. For v0.5,
+the M27 throw-on-write error is diagnostic enough (names the path
+that failed, so the user knows where to fix permissions).
+
+**Verified**:
+- `npm run verify` clean (tsc on src + examples)
+- `npm run build` clean
+- Drift-by-inversion (above) confirms both branches; cross-checked
+  in `introspect()` too
+- Existing demos pass exit 0; capability counts +1 as expected
+- No reprobe rerun needed — M28 doesn't touch the upstream surface
+  (M27 reprobe-clean baseline still applies)
+
+**Not verified** (acceptable gaps):
+- Synthetic-vs-round-trip probe correctness coverage (per above)
+- audit / recommend CLI surfaces against an AgentMemory-using config:
+  no existing CLI test config wires AgentMemory, and the CLI
+  surfaces consume `getValueReport()` directly via the same reducer
+  that the inline drift test exercised. Building a one-off CLI demo
+  for M28 would replicate the verification I already did.
+
+**Project state after M28**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11)
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- GitHub Actions CI gates `verify + reprobe` on every push/PR (M26)
+- AgentMemory text durable across process restart when `storage`
+  is set (M27) and **discoverable via `getValueReport()` /
+  `introspect()` / CLI surfaces** (M28)
+- AgentMemory's catalog now has 13 capability rows; 5 of them are
+  SDK-source (agentScoping, autoEmbed, hyperbolic, textPersistence
+  + the implicit health/metrics from the binding tier — actually 4
+  SDK-source). Each sdk-integration-dormant entry shows users
+  exactly how to opt in via the `defaultDormantEnable` text.
+
+**Next ship-task candidates**:
+- **AgentMemory `_memoryTags` + `_vectorMirror` persistence** — same
+  M27 sidecar pattern, schema bump to v2. Would unblock tag-filter
+  + hyperbolic re-rank for pre-restart memories. Medium scope.
+- **textPersistence tier-3 round-trip probe (M29 candidate)** — replace
+  the synthetic check with an actual write/read of a probe sidecar
+  to a tmp path. Catches unwriteable-storage at healthCheck time
+  rather than at first remember(). ~15 LOC. Aligns with M6.2
+  "method exists vs method works" generalization.
+- **Issue #04 or #05 probe attempt** — both unprobed entries in PRD
+  §11.6's coverage map. Scoping doc first.
+- **Cross-archetype-DI scoping doc** — codify additional DI patterns
+  beyond the v0.3 invariants ratified at M20.
+
+`docs/upstream-issues/README.md` references unchanged — pure SDK
+surface improvement.
+
 ## Update — M27 outcome (AgentMemory text persistence to backend via sidecar JSON)
 
 The M21 paper-cut left `AgentMemory.recall()` returning the original
