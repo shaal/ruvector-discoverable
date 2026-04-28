@@ -33,7 +33,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import type { ExplainTrace } from '../core/explain.js';
 import type { FeedbackProvider, FeedbackSignal, QueryId } from '../core/feedback.js';
 import type { Pipeline } from '../core/pipeline.js';
@@ -705,26 +705,12 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     const hyperCheck: CheckResult = this._hyperbolic
       ? await this._hyperbolicProbe()
       : { name: 'hyperbolic', status: 'unsupported', detail: 'hyperbolic: false at create-time', durationMs: 0, tier: 'archetype' };
-    // M28 — textPersistence is `ok` when storage was supplied at create-time
-    // (sidecar path was derived; M27 write-through is active), else
-    // `unsupported`. Synthetic check rather than round-trip — write+read
-    // correctness is exercised by M27's subprocess demo, not by every
-    // healthCheck() call.
-    const textPersistCheck: CheckResult = this._textStorePath !== null
-      ? {
-          name: 'textPersistence',
-          status: 'ok',
-          detail: `sidecar at ${this._textStorePath} (in-memory entries: ${this._textStore.size}, next seq: ${this._seq})`,
-          durationMs: 0,
-          tier: 'archetype',
-        }
-      : {
-          name: 'textPersistence',
-          status: 'unsupported',
-          detail: 'no `storage` option supplied at create-time',
-          durationMs: 0,
-          tier: 'archetype',
-        };
+    // M29 — textPersistence is verified by a tier-3 round-trip probe:
+    // write a probe sidecar variant in the user's storage directory,
+    // read it back via loadTextStore, assert schema integrity, unlink.
+    // Catches unwriteable storage at healthCheck() time rather than at
+    // first remember(). Replaces M28's synthetic ok/unsupported check.
+    const textPersistCheck: CheckResult = await this._textPersistProbe();
     this._lastHealth = summarize('AgentMemory', this._backend.kind, [
       ...bindingChecks, ...archetypeChecks, sonaSummary, graphCheck, autoEmbedCheck, hyperCheck, textPersistCheck,
     ]);
@@ -977,6 +963,77 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
         return { status: 'broken' as const, detail: `expected dChild < dFar; got dChild=${dChild.toFixed(4)}, dFar=${dFar.toFixed(4)}` };
       }
       return { status: 'ok' as const, detail: `dChild=${dChild.toFixed(4)} < dFar=${dFar.toFixed(4)} (root-to-near vs root-to-far on Poincaré ball)` };
+    }, 'archetype');
+  }
+
+  /**
+   * M29 — tier-3 round-trip probe for textPersistence. Replaces M28's
+   * synthetic ok/unsupported check.
+   *
+   * Writes a probe sidecar variant to `${_textStorePath}.probe-<stamp>.json`
+   * (same parent directory as the user's actual sidecar so the user-path's
+   * writeability is what's tested; different filename so user data isn't
+   * touched). Reads it back via `loadTextStore` to verify the schema-validation
+   * + parse path. Best-effort cleanup via `unlink().catch(() => {})` in
+   * `finally` — a leaked probe file is small (~80 bytes) and uniquely named,
+   * won't collide with future probe runs.
+   *
+   * Catches unwriteable user storage (permissions, missing parent dir, full
+   * disk) at healthCheck() time rather than at first remember(). Aligns with
+   * the M6.2 "method exists vs method works" generalization that's the SDK's
+   * load-bearing readiness gate.
+   */
+  private async _textPersistProbe(): Promise<CheckResult> {
+    if (this._textStorePath === null) {
+      return {
+        name: 'textPersistence',
+        status: 'unsupported',
+        detail: 'no `storage` option supplied at create-time',
+        durationMs: 0,
+        tier: 'archetype',
+      };
+    }
+    const userPath = this._textStorePath;
+    return await runCheck('textPersistence', async () => {
+      const stamp = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+      const probePath = `${userPath}.probe-${stamp}.json`;
+      const probeTmp = `${probePath}.tmp`;
+      const sentinelId = `__ruvsdk_probe_${stamp}`;
+      const sentinelText = `probe-text-${stamp}`;
+      const payload: TextStoreFile = {
+        version: 1,
+        agentId: this._options.agentId,
+        seq: 0,
+        texts: { [sentinelId]: sentinelText },
+      };
+      try {
+        try {
+          await writeFile(probeTmp, JSON.stringify(payload), 'utf8');
+          await rename(probeTmp, probePath);
+          const loaded = await loadTextStore(probePath, this._options.agentId);
+          const got = loaded.texts.get(sentinelId);
+          if (got !== sentinelText) {
+            return { status: 'broken' as const, detail: `round-trip mismatch at "${userPath}": wrote "${sentinelText}", read back "${got ?? '(missing)'}"` };
+          }
+          return { status: 'ok' as const, detail: `write+rename+read round-trip ok at "${userPath}"` };
+        } catch (e) {
+          // Catch inside the probe so fs failures (ENOENT, EACCES, ENOSPC,
+          // schema-corruption from loadTextStore) produce `broken` with a
+          // diagnostic detail rather than propagating to runCheck's
+          // status='error'. Both broken and error currently map to
+          // `upstream-bug` blocker via the reducer (a v0.6 candidate is
+          // per-row override so SDK-source archetype probes can declare
+          // sdk-integration on broken). Detail text is the actionable
+          // surface either way.
+          return {
+            status: 'broken' as const,
+            detail: `persistence round-trip failed at "${userPath}": ${e instanceof Error ? e.message : String(e)}`,
+          };
+        }
+      } finally {
+        await unlink(probePath).catch(() => {});
+        await unlink(probeTmp).catch(() => {});
+      }
     }, 'archetype');
   }
 }

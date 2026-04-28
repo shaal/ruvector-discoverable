@@ -194,6 +194,141 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M29 outcome (textPersistence tier-3 round-trip probe replaces M28's synthetic check)
+
+Closes the M27→M28→M29 trilogy on AgentMemory text persistence: M27
+shipped the durability mechanism (sidecar + write-through), M28 made
+it discoverable in `getValueReport()`, and M29 makes it *self-verifying*.
+The synthetic check that M28 introduced (`ok` whenever
+`_textStorePath !== null`) is replaced with a real write/rename/read/
+unlink round-trip that catches unwriteable user-storage at
+`healthCheck()` time rather than at first `remember()`.
+
+**Implementation** (~50 LOC):
+
+- `packages/sdk/src/archetypes/AgentMemory.ts`:
+  - `unlink` added to the `node:fs/promises` import.
+  - `_textPersistProbe()` private method: when `_textStorePath` is null,
+    returns `unsupported` (same as M28). When set, builds a probe path
+    `${userPath}.probe-${stamp}.json` (unique-per-run timestamp+random
+    suffix; same parent directory as the real sidecar so user-path
+    writeability is what's tested; different filename so user data
+    isn't touched). Uses the production `writeFile`+`rename`+
+    `loadTextStore` code paths to round-trip a sentinel record. Best-
+    effort cleanup via `try/finally` + `unlink(...).catch(() => {})`
+    on both probe path and probe-tmp.
+  - The healthCheck call site now does `await this._textPersistProbe()`
+    instead of building a synthetic CheckResult inline.
+  - **Internal try/catch routing**: fs errors (ENOENT, EACCES, ENOSPC)
+    are caught inside the probe and converted to `status: 'broken'`
+    with a diagnostic detail naming the path + the underlying error
+    message. Without this, `runCheck`'s outer catch would convert
+    them to `status: 'error'`, losing the SDK-specific framing.
+
+**Architectural call: same-parent probe path, not a tmp probe.** Initial
+task scoping suggested writing the probe sidecar to a tmp location.
+But that would only verify "the SDK's serialize/parse logic works"
+— and JSON.stringify + writeFile are stdlib, not SDK code. The
+SDK-relevant verification is "user's storage path is writeable."
+Same-parent + probe-suffix filename verifies that without touching
+user data; cleanup is straightforward.
+
+**Drift-by-inversion verified live (3-case inline test)**:
+
+```
+== Case A: no storage → unsupported ==
+  status: unsupported  detail: no `storage` option supplied at create-time
+== Case B: writeable storage → ok ==
+  status: ok  detail: write+rename+read round-trip ok at "..."
+  files in dir: [ 'agent.db' ]  leaked probes: none ✓
+== Case C (chmod 0500 parent dir): broken ==
+  status: broken
+  detail: persistence round-trip failed at "...": EACCES: permission denied, open '...'
+```
+
+Case C is the load-bearing inversion. Initially I tried
+`storage: '/no-such-dir/agent.db'`, but `RouterKbBackend.create()`'s
+own mkdir rejects unwriteable paths *before* `_textPersistProbe`
+runs — useful early-validation, but means the probe couldn't be
+exercised that way. The chmod-based approach (construct in writeable
+parent → chmod parent 0500 → run healthCheck) lets the probe see a
+real fs failure without the backend short-circuiting first.
+
+**Caught (accepted v0.5 trade-off)**: the reducer at
+`packages/sdk/src/core/capability-catalog.ts` maps `broken` →
+`upstream-bug` blocker. For an unwriteable user-storage path,
+`sdk-integration` would be more accurate (user fixes their config).
+The detail message remains the actionable surface either way, but
+the blocker tag is technically off. **Per-row blocker override on
+broken/error status** is logged as a v0.6 candidate so SDK-source
+archetype probes can declare the right blocker independent of the
+binding-tier convention.
+
+**Probe-file leak risk** (acceptable): if the process is SIGKILL'd
+between `rename` and the `finally`-block `unlink`, a probe sidecar
+remains on disk. The leaked file is small (~80 bytes), uniquely
+named (`*.probe-<timestamp>_<rand>.json`), and won't collide with
+future probe runs. Same risk-class as M27's `.tmp` leak; same
+acceptance.
+
+**M8.2 byte-stable**:
+- Existing demos pass exit 0 with same M28 capability counts (router
+  demo `3 of 13` / `5 sdk-integration`; v03 demo `5 of 13` /
+  `3 sdk-integration`). Storage is unset in all of them, so the
+  probe returns `unsupported` — same as M28's synthetic path.
+- M27 persist demo passes all 4 phases unchanged.
+- The `mixed (9/13 observed)` count is unchanged because the probe
+  still emits a `textPersistence` CheckResult (now real, was
+  synthetic) — the reducer counts it as observed either way.
+
+**Verified**:
+- `npm run verify` clean (tsc on src + examples)
+- `npm run build` clean
+- `node tools/reprobe-bindings/reprobe.mjs` clean (no upstream
+  surface change — pure SDK probe upgrade)
+- 3-case inline drift test (above)
+- All existing AgentMemory demos pass with byte-stable output
+
+**Not verified** (acceptable gaps):
+- Linux behavior of the chmod test (POSIX semantics are identical
+  to macOS; CI is macos-14 only currently per M26)
+- Windows behavior (out of scope — SDK CI doesn't gate on Windows)
+- Concurrent healthCheck races (each probe uses a unique
+  timestamp+random suffix; paths don't collide; reasoned through,
+  not stress-tested)
+
+**Project state after M29**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11) — M29 surfaces no new ones
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- GitHub Actions CI gates `verify + reprobe` on every push/PR (M26)
+- AgentMemory text durable across process restart when `storage`
+  is set (M27), discoverable via `getValueReport()` (M28), AND
+  **self-verifying via tier-3 round-trip probe at healthCheck()
+  time** (M29). The trilogy is complete: mechanism / surface /
+  correctness gate.
+
+**Next ship-task candidates**:
+- **AgentMemory `_memoryTags` + `_vectorMirror` persistence** — same
+  M27 sidecar pattern with schema bump to v2. Unblocks tag-filter
+  + hyperbolic re-rank for pre-restart memories. Wants its own
+  scoping doc — graph relations, vectors, tags are interrelated.
+- **Per-row blocker override on broken/error status (M30 candidate)** —
+  reducer change at `core/capability-catalog.ts` so SDK-source
+  archetype probes can declare `sdk-integration` blocker on broken
+  output (M29 surfaces the need; this fixes it generically).
+  ~10 LOC + reclassification of existing rows.
+- **Issue #04 or #05 probe attempt** — both unprobed; needs scoping
+  doc first.
+- **Cross-archetype-DI scoping doc** — codify additional DI patterns.
+
+`docs/upstream-issues/README.md` references unchanged — pure SDK
+correctness improvement.
+
 ## Update — M28 outcome (AgentMemory `textPersistence` capability catalog row — surfaces M27 in getValueReport)
 
 M27 shipped durable text persistence via SDK sidecar but left the
