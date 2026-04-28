@@ -194,6 +194,132 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M30 outcome (per-row blocker override on broken/error status)
+
+Closes the M29-documented limitation: the catalog reducer mapped any
+probe with `status: 'broken' | 'error'` to `blocker: 'upstream-bug'`,
+but SDK-source archetype-tier probes that fail because of *user
+misconfig* (textPersistence's chmod-unwriteable case) should classify
+as `sdk-integration`. M30 adds an opt-in field that lets specific
+catalog rows override the binding-tier default.
+
+**Implementation** (~12 LOC):
+
+- `packages/sdk/src/core/capability-catalog.ts`:
+  - `CapabilityCatalogEntry` gains optional
+    `dormantBlockerOnBroken?: DormantBlocker` field with JSDoc that
+    names when it fires (probe broken/error) and what the default is
+    (`upstream-bug`, the binding-tier convention).
+  - Reducer's broken/error branch: `cap.dormantBlockerOnBroken ?? 'upstream-bug'`
+    instead of the hardcoded `'upstream-bug'`. One-line change. The
+    other branches (unsupported, active-without-probe) remain
+    untouched — the override applies *only* to broken/error.
+- `packages/sdk/src/archetypes/AgentMemory.ts`:
+  - `textPersistence` catalog row gains
+    `dormantBlockerOnBroken: 'sdk-integration'`. Comment names M29's
+    chmod-unwriteable case as the load-bearing example.
+
+**Architectural call: additive opt-in, not migration.** Every existing
+catalog row's behavior is preserved by the default — only rows that
+explicitly opt in via the new field get the new behavior. No "big-bang"
+reclassification of the existing dormant-bug rows (cypher, dimension
+singleton, ruvllm wrapper-mismatch — all genuine upstream defects per
+Issues #01/#03/#06). The migration burden is per-row, decided by the
+archetype owner. This matches the M27→M28→M29 trilogy's milestone-by-
+milestone discipline: extend the contract, migrate one row, observe
+the migration, leave the rest for future work.
+
+**Drift-by-inversion verified live (3-case + backward-compat)**:
+
+```
+== Case A: no storage → unsupported ==
+  blocker: sdk-integration (via defaultDormantBlocker, unchanged)
+== Case B: writeable storage → active ==
+  active? true, dormant? false (no blocker; row is active)
+== Case C (drift-by-inversion): chmod 0500 → broken; blocker should flip ==
+  probe status: broken  blocker: sdk-integration   ← was upstream-bug pre-M30
+  reason: [observed via probe 'textPersistence', status=broken]
+          persistence round-trip failed at "...": EACCES: permission denied
+
+== Backward-compat check: GraphReasoner cypher (broken, no opt-in) ==
+  blocker: upstream-bug (unchanged — Issue #01 is a genuine upstream defect)
+```
+
+Case C was the M29-documented failure mode; M30 fixes it. The
+backward-compat check confirms the change is purely additive: any row
+that doesn't set `dormantBlockerOnBroken` keeps the upstream-bug
+default, including the existing dormant-bug rows that should stay
+upstream-bug (cypher, dimension singleton, etc.).
+
+**Field name caveat**: `dormantBlockerOnBroken` covers both `broken`
+and `error` statuses per the reducer's if-condition (which is a
+single branch handling both). The shortened name is mnemonic; the
+JSDoc explicitly documents the broader contract. Considered
+`dormantBlockerOnFailure` but it reads too generic. Acceptable
+trade-off; the contract is JSDoc-precise.
+
+**M8.2 byte-stable**: all existing demos pass with M29-baseline
+counts (storage is unset in the demos that print value reports, so
+textPersistence stays `unsupported` and the new `dormantBlockerOnBroken`
+override doesn't fire). No accidental classification flips for any
+other archetype. The M27 persist demo passes all 4 phases unchanged.
+
+**Verified**:
+- `npm run verify` clean (tsc on src + examples)
+- `npm run build` clean
+- `node tools/reprobe-bindings/reprobe.mjs` clean (no upstream surface
+  change — pure SDK reducer enhancement)
+- 3-case drift-by-inversion (above) + backward-compat check
+- All existing demos pass with M29-baseline counts
+
+**Not verified** (acceptable gaps):
+- Explicit test for the `error` status branch — textPersistence's M29
+  probe converts fs errors to `broken` internally (so `error` is
+  unreachable via the AgentMemory surface). The reducer's if-branch
+  is symmetric (one condition handles both broken and error), so the
+  logic flows identically; reasoned through, not stress-tested. A
+  future SDK-source probe that doesn't catch internally would
+  exercise the path naturally.
+- Other SDK-source archetype probes that might benefit from the
+  override (autoEmbed, hyperbolic, graphMemory) — none currently
+  classify as broken/error from user-misconfig (they're either ok or
+  unsupported, depending on opt-in). If any future probe surfaces a
+  user-misconfig-as-broken pattern, opting it in is one line.
+
+**Project state after M30**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11) — M30 surfaces no new ones
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- GitHub Actions CI gates `verify + reprobe` on every push/PR (M26)
+- AgentMemory text-persistence quartet complete: M27 mechanism / M28
+  surface / M29 correctness gate / **M30 classification correctness**.
+  When the M29 probe reports `broken` because of user-misconfig
+  (unwriteable storage path), the value report now correctly
+  classifies the dormant entry as `sdk-integration` — actionable for
+  the user, not misattributed to upstream.
+
+**Next ship-task candidates**:
+- **AgentMemory `_memoryTags` + `_vectorMirror` persistence**: same
+  M27 sidecar pattern with v2 schema bump. Larger scope — wants its
+  own scoping doc (graph relations + vectors + tags interrelated).
+- **Apply `dormantBlockerOnBroken` to other SDK-source archetype
+  probes**: a survey of `autoEmbed` / `hyperbolic` / `graphMemory` /
+  KB equivalents. None currently fail with broken-from-user-misconfig
+  (they tend toward ok/unsupported), so the migration is a no-op
+  today. Worth a brief audit pass when adding a new SDK-source probe.
+- **Issue #04 or #05 probe attempt**: both unprobed; needs scoping
+  doc first (PRD §11.6 explicitly classified them "not single-
+  subprocess-probeable").
+- **Cross-archetype-DI scoping doc**: codify additional DI patterns
+  beyond the v0.3 invariants ratified at M20.
+
+`docs/upstream-issues/README.md` references unchanged — pure SDK
+reducer enhancement.
+
 ## Update — M29 outcome (textPersistence tier-3 round-trip probe replaces M28's synthetic check)
 
 Closes the M27→M28→M29 trilogy on AgentMemory text persistence: M27

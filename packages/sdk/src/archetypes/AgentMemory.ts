@@ -277,6 +277,11 @@ const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     invocationKey: 'remember',
     defaultStatus: 'dormant',
     defaultDormantBlocker: 'sdk-integration',
+    // M30 — when M29's round-trip probe fails (e.g., chmod-unwriteable
+    // user storage path → EACCES), classify as sdk-integration rather
+    // than the reducer's upstream-bug default. SDK-source archetype
+    // probes whose failure modes are user-misconfig fix via this knob.
+    dormantBlockerOnBroken: 'sdk-integration',
     defaultDormantReason: 'AgentMemory was constructed without `storage`. Memory text from remember() lives in-process only and is lost on restart (M21 in-process map).',
     defaultDormantLift: 'M27 — memory text + per-agent seq counter persist across process restart via SDK-side sidecar JSON, so recall() returns original text instead of placeholder after a restart.',
     defaultDormantEnable: 'await AgentMemory.create({ ..., storage: \'/path/to/agent.db\' })',

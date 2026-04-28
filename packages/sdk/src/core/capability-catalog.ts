@@ -46,6 +46,22 @@ export type CapabilityCatalogEntry = {
    * Defaults to `sdk-integration` if unset (the most actionable category).
    */
   readonly defaultDormantBlocker?: DormantBlocker;
+  /**
+   * **M30** — override the blocker classification when a probe returns
+   * `broken` or `error`. Default: `upstream-bug` (current behavior; the
+   * binding-tier convention — a probe that fails is upstream's defect).
+   *
+   * Set this for SDK-source archetype-tier probes whose failure modes are
+   * user-misconfig rather than upstream defects. M29's textPersistence
+   * round-trip probe is the load-bearing example: an unwriteable
+   * user-storage path produces `broken` with an `EACCES` detail, but the
+   * actionable category is `sdk-integration` (user fixes their config),
+   * not `upstream-bug` (no upstream change would help).
+   *
+   * Applies only to broken/error. The unsupported and active-with-no-probe
+   * branches continue to use `defaultDormantBlocker`.
+   */
+  readonly dormantBlockerOnBroken?: DormantBlocker;
   /** Maps an `invocationCounts` key to populate `ActiveCapability.invocations`. */
   readonly invocationKey?: string;
 };
@@ -104,7 +120,10 @@ export function reduceValueReport(inputs: ReducerInputs): ValueReport {
     // (the most actionable category — if untagged, it's likely SDK work).
     let blocker: DormantBlocker;
     if (probe?.status === 'broken' || probe?.status === 'error') {
-      blocker = 'upstream-bug';
+      // M30: per-row override for SDK-source archetype probes whose
+      // failure modes are user-misconfig (sdk-integration) rather than
+      // upstream defects (upstream-bug, the binding-tier default).
+      blocker = cap.dormantBlockerOnBroken ?? 'upstream-bug';
     } else if (probe?.status === 'unsupported') {
       blocker = cap.defaultDormantBlocker ?? 'upstream-binding';
     } else {
