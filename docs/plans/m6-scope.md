@@ -194,6 +194,59 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M26.1 outcome (CI: add `npm run build` step before `npm run verify`)
+
+The first live GitHub Actions run after pushing M26-M31 (run
+`25033777992`, 2026-04-28) failed at the verify step with
+`TS2307: Cannot find module '../dist/index.js'` on
+`examples/audit-test-incomplete-config.ts` and
+`examples/sample-config.ts`. The examples' tsconfig type-checks `.ts`
+files that `import from '../dist/index.js'`; CI starts from a fresh
+clone where `dist/` doesn't exist (it's gitignored). Locally the
+verify passes because dist/ exists from prior `npm run build` runs
+during dev iteration.
+
+This is exactly the "first live CI run unverified" gap M26's
+confidence check named — the failure mode "config issue surfaces
+only on the runner" is precisely what surfaced. M26 documented this
+as a recoverable failure (1-line YAML fix).
+
+**Implementation** (~3 LOC YAML):
+
+- `.github/workflows/ci.yml`: new step `Build SDK (produces dist/
+  that examples import from)` between Install and Type-check, runs
+  `npm run build` in `packages/sdk`. Adds ~2 seconds to CI runtime;
+  produces `packages/sdk/dist/` for the verify step's
+  examples-tsconfig pass to resolve.
+
+**Diagnosis verified locally** by reproducing the CI failure: `rm
+-rf dist && npm run verify` produced the same TS2307 errors as the
+CI log. Then `npm run build && npm run verify` was clean. The fix
+mirrors what a fresh clone needs: `npm install && npm run build &&
+npm run verify`.
+
+**Lesson worth keeping**: the M26 drift-by-inversion proved the *gate*
+logic (probe broken → exit 1 → red badge) but couldn't test the
+*step ordering* (verify expects dist/ to exist). Different
+verification targets. Drift-by-inversion alone doesn't substitute
+for the first live run from a fresh clone — you have to actually
+run from a fresh clone to catch this class. Future CI workflow
+milestones should explicitly test from `rm -rf node_modules dist`
+before claiming verification.
+
+**Verified**:
+- Local reproduction of CI failure (TS2307 on no-dist) ✓
+- Local fix verification (build + verify clean) ✓
+- YAML still parses (5 → 6 steps; valid)
+
+**Not verified**:
+- Second live CI run after this commit (will fire on push; same
+  irreducible "first-run live" gap as M26, but the failure mode is
+  now scoped to "did `npm run build` itself work on macos-14" which
+  is much narrower)
+
+`docs/upstream-issues/README.md` references unchanged.
+
 ## Update — M31 scoping doc filed (AgentMemory `_memoryTags` + `_vectorMirror` persistence)
 
 Per CLAUDE.md "defer scoping passes for any milestone bigger than ~half
