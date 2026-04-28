@@ -194,6 +194,127 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M26 outcome (GitHub Actions CI: verify + reprobe gate on push/PR)
+
+PRD §10 metric #6 ("reprobe-clean-on-every-release") was added in M24 as
+a *testable* success criterion, but until M26 the test only ran when a
+human typed `node tools/reprobe-bindings/reprobe.mjs`. M26 makes the
+test enforce itself on every push to `main` and every PR.
+
+**Implementation** (~50 LOC YAML + 1 line README badge):
+
+- New `.github/workflows/ci.yml` — single job `verify-and-reprobe` on
+  `macos-14` (Apple silicon arm64). Five steps: checkout, setup-node@22
+  with npm cache keyed on `packages/sdk/package-lock.json`, `npm ci` in
+  `packages/sdk`, `npm run verify` (tsc on src + examples), `node
+  tools/reprobe-bindings/reprobe.mjs` from repo root. `timeout-minutes:
+  10` bounds runaway. Triggers on `push` to `main` and `pull_request` to
+  `main`.
+- README.md: standard CI status badge under the title, linking to the
+  workflow runs page.
+
+**Design decisions ratified during the work**:
+
+1. **`macos-14`, not `ubuntu-latest`.** `@ruvector/ruvllm-darwin-arm64`
+   is a *direct* (not optional) dep of `packages/sdk`. On Linux runners
+   `npm ci` would fail the platform constraint. macos-14 also matches
+   the local dev environment, so binding-method probes that load native
+   `.node` files exercise the same code path CI gates that developers
+   see. Public-repo macos-14 is free with no minute caps — no
+   cost-tradeoff to reckon with.
+
+2. **Single job, not parallel verify + reprobe jobs.** Total wall time
+   is ~1-2 min; install dominates. Splitting would double the
+   `actions/checkout` + `npm ci` overhead with no meaningful speedup.
+
+3. **`npm ci`, not `npm install`.** Lockfile exists at
+   `packages/sdk/package-lock.json`. Deterministic install matters
+   precisely because reprobe asserts on installed package versions for
+   the binding-method probes (Issue #03 needs to load
+   `@ruvector/router@0.1.30` to confirm the deadlock; a phantom upgrade
+   would muddy drift attribution).
+
+4. **No code changes to reprobe or probes.** Probe #03's
+   `'skipped'` exit code (M23 work) is what makes CI work zero-config:
+   `ruvector/` is gitignored, the in-repo `@ruvector/core` binding
+   fallback won't exist on CI, and the probe correctly exits 64 →
+   reprobe classifies as `·` (skipped) → doesn't count as drift. M23's
+   investment pays off here for free.
+
+**Drift-by-inversion verified live during the work**: temporarily
+flipped `@ruvector/ruvllm` `expect: 'published'` → `'unpublished'`,
+re-ran reprobe locally, observed `EXIT=1` and a paste-ready drift block
+(`expected=unpublished, observed=published@2.5.4`), then restored. This
+proves the gate logic CI inherits — `process.exit(1)` propagates to
+GitHub Actions step status, badge turns red. The CI step's
+exit-code-propagation behavior is GitHub's stock contract and was not
+re-tested.
+
+**Confirmed clean baseline post-restore**:
+- `git diff --stat tools/reprobe-bindings/reprobe.mjs` → no change
+- `node tools/reprobe-bindings/reprobe.mjs` → exit 0, "31/31 npm + 1/1 CLI + 6/6 binding-method probes match expected"
+- `npm run verify` → tsc clean
+- `git status` → only `.github/workflows/ci.yml` (new) + `README.md` (badge added) modified
+
+**Caught (accepted as an irreducible gap)**:
+- The first live GitHub Actions run hasn't been observed at commit
+  time. This is structurally unverifiable without pushing — same class
+  of gap M25 accepted ("live GitHub render presumed standard"). If the
+  first run reveals a config issue (cache key path, Node version
+  mismatch, runner availability quirk), the badge will turn red
+  immediately and a follow-up commit can fix it. Recoverable failure
+  mode by design.
+
+**Verified**: workflow file is 51 lines / 1.8 KB (within the 30–60 LOC
+budget proposed during scoping); YAML parses cleanly via `python3 -c
+"import yaml; yaml.safe_load(open(...))"`; the `actions/checkout@v4` +
+`actions/setup-node@v4` + `cache: 'npm'` + `cache-dependency-path`
+pattern is standard for monorepo layouts; badge URL follows GitHub's
+canonical `/{owner}/{repo}/actions/workflows/{file}/badge.svg` format
+with `?branch=main` to track the default branch only.
+
+**Not verified** (acceptable gaps):
+- Live CI green run on GitHub (per above; recoverable)
+- Behavior on PRs from forks (unprivileged context restrictions on
+  caches; not exercised yet, low priority for a single-author research
+  repo)
+- `concurrency` block to cancel superseded runs (polish; skipped — for
+  a low-traffic repo, parallel runs are cheap and the explicit
+  visibility into each push's status is preferable)
+
+**Project state after M26**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11)
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- Repo published at https://github.com/shaal/ruvector-discoverable
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- **PRD §10 metric #6 now self-enforced**: `verify` + `reprobe` run
+  automatically on every push to `main` and every PR. Drift on any of
+  the 38 monitored upstream signals fails CI red within ~1-2 min.
+
+**Next ship-task candidates**:
+- **AgentMemory text persistence to backend** — M21 stores in-process
+  text alongside vector ids; v0.5 could persist the text via backend
+  metadata so `recall()` survives a process restart. Aligns with PRD
+  §5.4 AgentMemory durability story. Medium scope.
+- **An Issue #04 or #05 probe attempt** — the 2 unprobed entries in
+  PRD §11.6's coverage map. Both were explicitly classified
+  "not single-subprocess-probeable" (correctness/setup defects);
+  shipping a probe would require a different probe shape than M22/M23's
+  subprocess pattern. Wants a scoping doc first.
+- **Cross-archetype-DI scoping doc** — codify additional DI patterns
+  beyond the v0.3 invariants ratified at M20.
+- **`packages/sdk/README.md` CI badge** — add the same badge to the SDK
+  consumer README so the consumer-facing entry point also surfaces CI
+  health. ~1 line.
+
+`docs/upstream-issues/README.md` references unchanged (M26 surfaced no
+new upstream issues; the work was operational infrastructure, not
+upstream-defect discovery).
+
 ## Update — M25 outcome (repo-root README.md — visitor-facing front page for the published repo)
 
 The repo went public at https://github.com/shaal/ruvector-discoverable

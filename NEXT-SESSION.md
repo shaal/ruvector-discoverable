@@ -45,7 +45,8 @@ anything:
   6. `git log --oneline | head -30` to see the milestone sequence.
   7. `cd packages/sdk && npm run verify` to confirm a clean baseline.
   8. `node tools/reprobe-bindings/reprobe.mjs` to confirm 0 drift on
-     the 38 monitored upstream signals.
+     the 38 monitored upstream signals. (Also enforced automatically by
+     CI on every push to main and PR — see `.github/workflows/ci.yml`.)
 
 Once you've read those, propose the next ship-task with reasoning, and
 I'll confirm with "please use ship-task and follow your recommendation

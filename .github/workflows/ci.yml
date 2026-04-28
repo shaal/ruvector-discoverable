@@ -1,0 +1,53 @@
+name: CI
+
+# Operationalizes PRD §10 success metric #6: reprobe-clean-on-every-release.
+# Two gates run on every push to main and every PR:
+#   1. `npm run verify` — tsc --noEmit on src + examples (catches type drift)
+#   2. `node tools/reprobe-bindings/reprobe.mjs` — 38 monitored upstream
+#      signals (31 npm publication + 1 CLI surface + 6 binding-method probes).
+#      Exits 1 on any drift, with a paste-ready Markdown block on stdout.
+#
+# Runner is macos-14 (Apple silicon arm64) because `@ruvector/ruvllm-darwin-arm64`
+# is a direct dep of packages/sdk; ubuntu-latest would fail `npm ci` on the
+# platform constraint. macos-14 also matches the local dev environment, so
+# binding-method probes (which load native .node files) exercise the same
+# path CI gates that developers see.
+#
+# Probe #03 (core-dimension-singleton) cleanly skips on CI because the
+# in-repo `ruvector/` upstream clone is gitignored — the probe exits 64
+# (skipped), which the runner correctly classifies as not-drift. Other
+# binding-method probes load packages installed via `npm ci` and run normally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify-and-reprobe:
+    name: verify + reprobe
+    runs-on: macos-14
+    # Local total wall time is ~1-2 min (npm ci + tsc + reprobe). 10 min
+    # bounds runaway scenarios (e.g., a future probe whose SIGKILL fails).
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: packages/sdk/package-lock.json
+
+      - name: Install SDK dependencies
+        run: npm ci
+        working-directory: packages/sdk
+
+      - name: Type-check (tsc --noEmit on src + examples)
+        run: npm run verify
+        working-directory: packages/sdk
+
+      - name: Reprobe upstream surface (38 monitored signals)
+        run: node tools/reprobe-bindings/reprobe.mjs

@@ -1,5 +1,7 @@
 # ruvector-discoverable
 
+[![CI](https://github.com/shaal/ruvector-discoverable/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shaal/ruvector-discoverable/actions/workflows/ci.yml)
+
 **Task-first archetype-based SDK over [`github.com/ruvnet/ruvector`](https://github.com/ruvnet/ruvector).** Solves discoverability collapse (developers reach for `VectorDb` and stop, missing 95% of upstream's unique capability) by surfacing 6 task-first archetypes — `KnowledgeBase`, `AgentMemory`, `GraphReasoner`, `TimeSeriesMemory`, `LocalLLM`, `AgentFramework` — each with `.explain()` on every result, `getValueReport()` with 4-blocker dormant classification, and 11 paste-ready upstream-defect reports the SDK surfaces observably.
 
 > **Status — v0.3 / pre-npm-publish.** The KB-family of archetypes (KB / TimeSeriesMemory / AgentMemory) is now publish-ready via `nativePackage: 'router'` — no `RUVECTOR_CORE_BINDING` env-var workaround needed. `npm install @ruvector/sdk @ruvector/router` is the target story; `@ruvector/sdk` itself isn't yet on npm. The full v1.0 archetype + CLI surface is implemented and verified. `tools/reprobe-bindings/reprobe.mjs` v0.5 monitors **38 upstream signals** (31 npm + 1 CLI + 6 binding-method probes); CI-gateable.
