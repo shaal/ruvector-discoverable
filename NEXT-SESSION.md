@@ -38,7 +38,8 @@ anything:
   4. Skim the scoping docs in docs/plans/ for design context on the
      larger milestones: m11-scope.md (LocalLLM), m12-scope.md (LocalLLM
      Phase 2), m13-scope.md (AgentMemory), m14-scope.md (AgentFramework),
-     m15-scope.md (CLI), m17-scope.md (multi-transport).
+     m15-scope.md (CLI), m17-scope.md (multi-transport), m31-scope.md
+     (AgentMemory full-state persistence).
   5. Read packages/sdk/README.md to understand the user-facing surface
      and the v0.3 publish-ready story (KB-family archetypes via
      nativePackage: 'router').

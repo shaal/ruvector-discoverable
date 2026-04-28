@@ -194,6 +194,49 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M31 scoping doc filed (AgentMemory `_memoryTags` + `_vectorMirror` persistence)
+
+Per CLAUDE.md "defer scoping passes for any milestone bigger than ~half
+a session," M31 enters the m11/m12/m13/m14/m15/m17 scoping pattern
+before any source change. Deliverable: `docs/plans/m31-scope.md`
+(236 lines). No code changes in this milestone.
+
+**What the scoping covered**:
+
+- **State map**: which SDK-side AgentMemory state survives the M27
+  sidecar today (`_textStore`, `_seq`) vs what's still lost
+  (`_memoryTags`, `_vectorMirror`); plus what's correctly session-only
+  (`_trajectoryByQuery`) and what's out-of-scope (graph relations,
+  owned by user-supplied GraphReasoner DI).
+- **Backend surface verified live**: `@ruvector/router.VectorDb` lacks
+  `get(id)` (only has `getAllIds`); `@ruvector/core.VectorDb` HAS
+  `get(id)` but `KbBackend` interface doesn't expose it. This drives
+  the persist-vs-reconstruct choice for vectors.
+- **Three architectures evaluated**: A (single-sidecar v2 with base64
+  vectors — recommended), B (persist tags, reconstruct vectors lazily
+  on core / no-op on router), C (sibling binary file for vectors).
+- **9 open questions** for ratification, each with a lean. Q1
+  (architecture), Q4 (catalog row rename), Q7 (split delivery
+  M31.1=tags / M31.2=vectors) are the load-bearing ones.
+
+**Surprising finding**: `@ruvector/router.VectorDb` having no per-id
+`get` is a gap-class observation comparable to Issue #11 (delete
+deadlock) — same package, different missing surface. Filing as an
+upstream issue would be parallel work; the scoping doc surfaces it
+without committing to a filing.
+
+**Anti-finding** (worth naming): graph relations are NOT M31's scope.
+The `_graph` field is a `GraphReasoner` DI'd in by the user.
+GraphReasoner has its own `storagePath` option via
+`@ruvector/graph-node.GraphDatabase.open(path)`. AgentMemory's value
+report should NOT claim graph-relations persistence.
+
+**Next step**: user ratifies open questions (or redirects); then
+M31.1 ship-task implements per the ratified leans.
+
+`docs/upstream-issues/README.md` references unchanged — pure scoping
+work, no upstream issues filed yet.
+
 ## Update — M30 outcome (per-row blocker override on broken/error status)
 
 Closes the M29-documented limitation: the catalog reducer mapped any
