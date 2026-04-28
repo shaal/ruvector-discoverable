@@ -194,6 +194,161 @@ Key property: the cypher diagnostic is **observed, not declared**. When upstream
 
 v0.2 work item: wire `getValueReport()` to consult cached `healthCheck()` results so dormant detection is dynamic, not hardcoded.
 
+## Update — M27 outcome (AgentMemory text persistence to backend via sidecar JSON)
+
+The M21 paper-cut left `AgentMemory.recall()` returning the original
+text from `remember()` only within a single process — the in-process
+`Map<id, text>` was lost on restart. M27 closes that gap by mirroring
+the map to a sidecar JSON co-located with the backend storage path, so
+text + seq counter survive process exit.
+
+**Architectural call: SDK-side, not via upstream metadata.** Both
+`@ruvector/core` and `@ruvector/router` are pure vector-by-id stores —
+neither has a metadata channel for arbitrary key-value data. Per CLAUDE.md
+hard rule #1 ("never block SDK delivery on an upstream fix"), persistence
+lives at the SDK layer instead of waiting for upstream to add metadata.
+The M21 journal's "via the backend's metadata/properties channel (when
+one exists)" remains a valid future direction; M27 ships the
+upstream-independent path today.
+
+**Implementation** (~110 LOC of source + ~120 LOC demo):
+
+- `packages/sdk/src/archetypes/AgentMemory.ts`:
+  - New `_textStorePath: string | null` field — derived from
+    `${options.storage}.${options.agentId}.text.json` when storage is
+    set; null otherwise (pre-M27 in-memory-only behavior).
+  - Constructor accepts `loadedTexts` + `loadedSeq` so the seq counter
+    resumes from disk rather than restarting at 0 — the load-bearing
+    detail that prevents post-restart memory IDs from colliding with
+    pre-restart ones.
+  - `static create()`: when sidecar exists, parse it via `loadTextStore`
+    helper (validates schema version=1, agentId match, string values).
+    Throws `RuVectorError('TEXT_STORE_CORRUPT' | 'TEXT_STORE_AGENT_MISMATCH'
+    | 'TEXT_STORE_READ_FAILED')` on schema/file issues.
+  - `remember()` and `forget()`: write-through via
+    `_persistTextStoreIfBacked()` — atomic via writeFile-to-`.tmp` +
+    rename (POSIX rename is atomic).
+  - New `INVALID_AGENT_ID` validation: when storage is set, `agentId`
+    must not contain `/`, `\\`, or `\\0`. Backward compatible — the
+    validation only fires when storage is set, so no-storage code paths
+    that used arbitrary agentId strings continue to work.
+  - New public `textStorePath()` accessor for diagnostics (returns null
+    in in-memory mode).
+  - JSDoc on `AgentMemoryOptions.storage` updated to name M27 behavior.
+- `packages/sdk/examples/agent-memory-persist-demo/run.mjs`: subprocess-
+  driven demo with 4 phases (write, parent inspects, cross-process
+  reopen verifies seq resumes, drift-by-inversion deletes sidecar and
+  confirms seq resets to 0).
+- `packages/sdk/README.md`: AgentMemory capabilities row gains
+  "optional text persistence (M27)" mention.
+
+**Why subprocess for the demo**: `@ruvector/router` holds a lock on its
+`storagePath` that isn't released until process exit (its `close()` is
+a no-op since router has no explicit close — native state is GC'd).
+Within a single process, `am.close(); AgentMemory.create({ storage: same })`
+fails with "Database already open. Cannot acquire lock." For a real user —
+process A exits, process B starts — the lock releases at process
+termination. Demo simulates that honestly via `child_process.spawnSync`
+rather than pretending single-process close-and-reopen works on every
+backend. Caught the lock issue live in Phase 1 of M27 implementation
+when the first demo design tried it; pivoted to subprocess.
+
+**Drift-by-inversion verified live**: Phase 4 of the persist demo
+removes the sidecar between cross-process restart, then the new child
+process's `remember()` issues `mem:agent:0` (not `:3`) — proving the
+load-from-disk path is what was restoring state in Phase 3. Without
+this inversion test, the green Phase 3 result could be coincidental
+(e.g., from some other persistence mechanism). The inversion confirms
+the gate.
+
+**Validator drift-by-inversion** (separate gate): tested
+`agentId: "user/with/slash"` triggers `INVALID_AGENT_ID` when storage
+is set; verified the same agentId with no storage continues to work
+(backward compat). Ran via inline `node -e` rather than committing a
+demo for it — small enough check that a journal entry suffices.
+
+**M8.2 byte-stable**: `agent-memory-router-demo/run.mjs`,
+`v03-publish-ready-demo/run.mjs` both pass exit 0 with output unchanged
+(neither passes `storage`, so M27 code paths are dormant for them).
+Native AgentMemory demo (`agent-memory-demo/run.mjs`) hits the same
+documented Issue #03 dimension-mismatch as the M21 baseline — pre-existing
+byte-stable failure mode, not a regression.
+
+**Caught (accepted as v0.5 trade-offs)**:
+- Sidecar full-rewrite per `remember()` is O(n) in store size. At ~10k
+  memories × 200 bytes = 2 MB rewrite per call. SSD writes are ~1 ms
+  so this is fine through ~100k memories. A future v1 could move to
+  append-only journaling. Not a v0.5 concern.
+- ENOENT when storage directory doesn't exist surfaces a raw fs error
+  (diagnostic but not pretty). Adding `mkdir -p` semantics has its
+  own pitfalls (concurrent mkdir, permission inheritance) and isn't
+  worth shipping in this milestone.
+- Concurrent `remember()` calls in the same instance produce
+  last-write-wins on the sidecar — same in-memory state both writes
+  see, so the surviving file is consistent. Not a correctness issue
+  for sequential user code; documented for completeness.
+
+**Verified**:
+- `npm run verify` clean (tsc on src + examples)
+- `node tools/reprobe-bindings/reprobe.mjs` clean (no drift on 38
+  monitored upstream signals)
+- New persist demo passes all 4 phases including the inversion gate
+- Existing AgentMemory router demo + v03 publish-ready demo run
+  unchanged (storage unset → `_textStorePath: null` → no disk I/O →
+  byte-stable output)
+- agentId validation positive case (slash → throws structured error)
+- agentId validation negative case (slash + no storage → still works)
+
+**Not verified** (acceptable gaps):
+- Concurrent process write contention against the same sidecar (two
+  AgentMemory instances at the same storage in different processes
+  writing simultaneously). Per the existing AgentMemory contract,
+  cross-instance behavior at the same `storage` path was already
+  undefined before M27 (Finding B shared-state caveat for the backend
+  itself). M27 inherits the same trade-off.
+- Recovery from a crash mid-rename (very narrow window). The temp
+  file would be orphaned; the original sidecar is intact (rename is
+  atomic). Acceptable.
+
+**Project state after M27**:
+- 6 archetypes implemented
+- 3 of 3 CLI subcommands
+- All 3 KB-family archetypes publish-ready under `nativePackage:
+  'router'`
+- 11 paste-ready upstream issues (#01–#11) — M27 surfaces no new ones
+- `reprobe.mjs` v0.5 monitors 38 upstream signals
+- 2 of 3 transport backends shipped for GraphReasoner + LocalLLM
+- GitHub Actions CI gates `verify + reprobe` on every push/PR (M26)
+- **AgentMemory text now durable across process restart when `storage`
+  is set** — closes the M21 paper-cut's stated v0.5 gap. The M21
+  journal's "v0.5 could persist text alongside the embedding via the
+  backend's metadata/properties channel" is fulfilled via SDK sidecar
+  rather than upstream metadata, with the upstream-metadata path
+  remaining a valid future direction if it ever materializes.
+
+**Next ship-task candidates**:
+- **AgentMemory `_memoryTags` + `_vectorMirror` persistence** — M27
+  persisted text + seq; tags drive `recall({ tags })` filtering and
+  `_vectorMirror` drives hyperbolic re-rank. After restart these are
+  empty, so tag-filter and hyperbolic re-rank are silently no-op for
+  pre-restart memories. Persisting them follows the same sidecar
+  pattern; would need a schema-bump (version=2) on the sidecar.
+- **Capability catalog row for `textPersistence`** — runtime-classified
+  active when storage is set, dormant `[sdk-integration]` when unset.
+  Surfaces M27 in `getValueReport()`. ~20 LOC; adds an
+  invocation-counted catalog row.
+- **An Issue #04 or #05 probe attempt** — the 2 unprobed entries in
+  PRD §11.6's coverage map. Both are correctness/setup defects that
+  PRD §11.6 explicitly classified "not single-subprocess-probeable";
+  would need a different probe shape than M22/M23's. Wants its own
+  scoping doc.
+- **Cross-archetype-DI scoping doc** — codify additional DI patterns
+  beyond the v0.3 invariants ratified at M20.
+
+`docs/upstream-issues/README.md` references unchanged (M27 surfaces
+no new upstream issues — pure SDK-side fix that compensates for the
+absence of an upstream metadata channel).
+
 ## Update — M26 outcome (GitHub Actions CI: verify + reprobe gate on push/PR)
 
 PRD §10 metric #6 ("reprobe-clean-on-every-release") was added in M24 as

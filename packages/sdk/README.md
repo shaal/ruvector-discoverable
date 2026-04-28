@@ -216,7 +216,7 @@ Each archetype is a coherent task-first surface over a subset of upstream's capa
 | Archetype | Task | Default-active capabilities |
 |---|---|---|
 | `KnowledgeBase` | RAG over documents | vector search, ingest, optional Graph RAG, optional SONA continual learning |
-| `AgentMemory` | Per-agent state with continual learning | vector recall, agent-scoping, optional SONA, optional graph-relations, optional hyperbolic distance |
+| `AgentMemory` | Per-agent state with continual learning | vector recall, agent-scoping, optional SONA, optional graph-relations, optional hyperbolic distance, optional text persistence (M27 — pass `storage` to write a sidecar JSON; survives process restart) |
 | `GraphReasoner` | Multi-hop graph queries | k-hop traversal, hyperedge search, graph stats |
 | `TimeSeriesMemory` | Sequential / streaming retrieval | timestamp-keyed recall, changepoint detection (SDK-source) |
 | `LocalLLM` | Run an LLM locally | embed (768d, unit-normalized), similarity, query, route |

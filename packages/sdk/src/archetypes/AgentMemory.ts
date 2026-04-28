@@ -32,6 +32,8 @@
  * `Float32Array` for the context query.
  */
 
+import { existsSync } from 'node:fs';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import type { ExplainTrace } from '../core/explain.js';
 import type { FeedbackProvider, FeedbackSignal, QueryId } from '../core/feedback.js';
 import type { Pipeline } from '../core/pipeline.js';
@@ -56,7 +58,16 @@ export interface AgentMemoryOptions {
   readonly dimensions: number;
   /** Distance metric. Default: 'Cosine'. */
   readonly distanceMetric?: 'Euclidean' | 'Cosine' | 'DotProduct' | 'Manhattan';
-  /** Storage path. Default: in-memory (subject to Finding C — see m6-scope.md). */
+  /**
+   * Storage path. Default: in-memory (subject to Finding C — see m6-scope.md).
+   *
+   * **M27 (v0.5)**: when set, AgentMemory also writes a sidecar JSON at
+   * `${storage}.${agentId}.text.json` containing user-supplied `text` from
+   * `remember()` plus the per-agent `_seq` counter. Read on `create()` to
+   * restore state across process restarts; written-through on `remember()`
+   * and `forget()`. Throws `INVALID_AGENT_ID` if `agentId` contains
+   * filesystem-unsafe characters when storage is set.
+   */
   readonly storage?: string;
   /**
    * Path to upstream @ruvector/core binary. Falls back to RUVECTOR_CORE_BINDING.
@@ -318,13 +329,27 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   // archetype lifecycle as _memoryTags / _vectorMirror; cleared on forget()
   // and close(). When `text` is omitted at remember-time (embedding-only
   // remember), no entry is written and recall falls back to the placeholder.
+  //
+  // **M27 (v0.5)**: when `options.storage` is set, the in-process map is
+  // mirrored to a sidecar JSON file at `${storage}.${agentId}.text.json`.
+  // Read once on create() to repopulate after a restart; written-through on
+  // remember() and forget(). The persisted seq counter (_seq) is bundled
+  // so post-restart memory IDs don't collide with pre-restart ones.
+  // Upstream NAPI bindings (@ruvector/core, @ruvector/router) have no
+  // metadata channel, so persistence lives at the SDK layer.
   private _textStore = new Map<string, string>();
+  // Path to the sidecar JSON when storage-backed persistence is active.
+  // null when AgentMemory was constructed without `storage` (in-memory mode).
+  private readonly _textStorePath: string | null;
 
   private constructor(
     backend: KbBackend,
     options: AgentMemoryOptions,
     sona: NativeSonaBackend | null,
     ownsSona: boolean,
+    textStorePath: string | null,
+    loadedTexts: ReadonlyMap<string, string>,
+    loadedSeq: number,
   ) {
     this._backend = backend;
     this._options = options;
@@ -334,6 +359,9 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     this._embedder = options.embedder ?? null;
     this._relationExtractor = options.relationExtractor ?? defaultRelationExtractor;
     this._hyperbolic = options.hyperbolic === true;
+    this._textStorePath = textStorePath;
+    this._textStore = new Map(loadedTexts);
+    this._seq = loadedSeq;
   }
 
   static async create(options: AgentMemoryOptions): Promise<AgentMemory> {
@@ -371,7 +399,29 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
       }
     }
 
-    return new AgentMemory(backend, options, sona, ownsSona);
+    // M27 — derive sidecar path and load prior text/seq when storage is set.
+    // No `storage` → null path → in-memory-only behavior (pre-M27 default).
+    // When storage IS set, agentId becomes filesystem-relevant for the
+    // first time. Reject path-unsafe characters up-front rather than
+    // letting them produce a confusing fs error mid-write.
+    if (options.storage !== undefined && /[/\\\0]/.test(options.agentId)) {
+      throw new RuVectorError(
+        'INVALID_AGENT_ID',
+        `AgentMemory.create: agentId="${options.agentId}" cannot contain path separators ('/', '\\\\') or NUL when storage is set; the sidecar path "<storage>.<agentId>.text.json" would be malformed.`,
+      );
+    }
+    const textStorePath = options.storage !== undefined
+      ? `${options.storage}.${options.agentId}.text.json`
+      : null;
+    let loadedTexts: ReadonlyMap<string, string> = new Map();
+    let loadedSeq = 0;
+    if (textStorePath !== null && existsSync(textStorePath)) {
+      const loaded = await loadTextStore(textStorePath, options.agentId);
+      loadedTexts = loaded.texts;
+      loadedSeq = loaded.seq;
+    }
+
+    return new AgentMemory(backend, options, sona, ownsSona, textStorePath, loadedTexts, loadedSeq);
   }
 
   /**
@@ -390,6 +440,9 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     // M21: persist text when supplied. Embedding-only remember() leaves
     // _textStore unset for this id; recall falls back to the placeholder.
     if (record.text !== undefined) this._textStore.set(id, record.text);
+    // M27: when storage-backed, write-through. The seq has already been
+    // incremented by _nextMemoryId() and is the next-to-issue value.
+    await this._persistTextStoreIfBacked();
 
     const tags = this._relationExtractor(record);
     if (tags.length > 0) this._memoryTags.set(id, tags);
@@ -594,6 +647,9 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
     this._memoryTags.delete(id);
     this._vectorMirror.delete(id);
     this._textStore.delete(id);
+    // M27: write-through on forget so the on-disk sidecar matches the
+    // in-process state. `_seq` is unchanged (we don't reuse old IDs).
+    await this._persistTextStoreIfBacked();
     this.bump('forget');
     return await this._backend.deleteId(id);
   }
@@ -686,6 +742,38 @@ export class AgentMemory implements ValueReportProvider, FeedbackProvider, Healt
   }
   private bump(method: string): void {
     this._invocationCounts.set(method, (this._invocationCounts.get(method) ?? 0) + 1);
+  }
+
+  /**
+   * M27 — write the in-memory text + seq counter to the sidecar JSON,
+   * atomically (write to .tmp, fsync via rename). No-op when AgentMemory
+   * was constructed without `storage` (pre-M27 default, in-memory only).
+   *
+   * Throws on write failure rather than swallowing — callers learn that
+   * persistence broke the same way they'd learn that backend.insert broke.
+   */
+  private async _persistTextStoreIfBacked(): Promise<void> {
+    if (this._textStorePath === null) return;
+    const payload: TextStoreFile = {
+      version: 1,
+      agentId: this._options.agentId,
+      seq: this._seq,
+      texts: Object.fromEntries(this._textStore),
+    };
+    const json = JSON.stringify(payload);
+    const tmp = `${this._textStorePath}.tmp`;
+    await writeFile(tmp, json, 'utf8');
+    await rename(tmp, this._textStorePath);
+  }
+
+  /**
+   * M27 — testing/diagnostic accessor. Returns the sidecar path the
+   * archetype writes to (or null in in-memory mode). Demos use this to
+   * verify the file was created at the expected path without reaching
+   * into private fields.
+   */
+  textStorePath(): string | null {
+    return this._textStorePath;
   }
 
   /**
@@ -911,6 +999,83 @@ function poincareDistance(a: Float32Array, b: Float32Array): number {
   const arg = 1 + 2 * dot_diff / denom;
   // arcosh(z) is real for z ≥ 1; numerical noise can push slightly under.
   return Math.acosh(Math.max(arg, 1));
+}
+
+/**
+ * M27 — schema for the AgentMemory text-store sidecar JSON.
+ * Versioned for forward compatibility; v1 is texts + seq + agentId.
+ */
+interface TextStoreFile {
+  readonly version: 1;
+  readonly agentId: string;
+  readonly seq: number;
+  readonly texts: Readonly<Record<string, string>>;
+}
+
+/**
+ * M27 — load a sidecar JSON written by a prior AgentMemory instance.
+ *
+ * Throws `RuVectorError('TEXT_STORE_CORRUPT', ...)` on parse failure
+ * or schema mismatch — corruption is a data-integrity issue worth
+ * surfacing rather than silently dropping.
+ *
+ * Throws on agentId mismatch (sidecar was written by a different agent)
+ * to catch the misuse where the same `storage` path is reused with a
+ * different `agentId` but the file path collides — defense-in-depth even
+ * though the file path itself is agent-scoped.
+ */
+async function loadTextStore(
+  path: string,
+  expectedAgentId: string,
+): Promise<{ texts: ReadonlyMap<string, string>; seq: number }> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (e) {
+    throw new RuVectorError(
+      'TEXT_STORE_READ_FAILED',
+      `Failed to read AgentMemory text-store sidecar at "${path}": ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new RuVectorError(
+      'TEXT_STORE_CORRUPT',
+      `AgentMemory text-store sidecar at "${path}" is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (
+    typeof parsed !== 'object' || parsed === null ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    typeof (parsed as { agentId?: unknown }).agentId !== 'string' ||
+    typeof (parsed as { seq?: unknown }).seq !== 'number' ||
+    typeof (parsed as { texts?: unknown }).texts !== 'object'
+  ) {
+    throw new RuVectorError(
+      'TEXT_STORE_CORRUPT',
+      `AgentMemory text-store sidecar at "${path}" has unexpected schema. Expected { version: 1, agentId: string, seq: number, texts: object }.`,
+    );
+  }
+  const file = parsed as TextStoreFile;
+  if (file.agentId !== expectedAgentId) {
+    throw new RuVectorError(
+      'TEXT_STORE_AGENT_MISMATCH',
+      `AgentMemory text-store sidecar at "${path}" was written for agentId="${file.agentId}" but this AgentMemory was constructed with agentId="${expectedAgentId}". Use a different storage path per agent or delete the stale sidecar.`,
+    );
+  }
+  const texts = new Map<string, string>();
+  for (const [k, v] of Object.entries(file.texts)) {
+    if (typeof v !== 'string') {
+      throw new RuVectorError(
+        'TEXT_STORE_CORRUPT',
+        `AgentMemory text-store sidecar at "${path}" has non-string value at id="${k}".`,
+      );
+    }
+    texts.set(k, v);
+  }
+  return { texts, seq: file.seq };
 }
 
 function summarizeSonaProbes(checks: readonly CheckResult[]): CheckResult {
